@@ -12,7 +12,11 @@ function col(name){ return db ? db.collection(name) : null; }
 
 function cloudSave(collName, record){
   if(!firebaseReady||!db)return;
-  try{ db.collection(collName).doc(String(record.id)).set(record); }catch(e){ console.warn('cloudSave error:',e); }
+  try{ 
+    db.collection(collName).doc(String(record.id)).set(record)
+      .then(function(){ console.log('Saved to Firestore:',collName,record.id); })
+      .catch(function(e){ console.error('cloudSave error:',collName,e); });
+  }catch(e){ console.warn('cloudSave error:',e); }
 }
 function cloudDelete(collName, id){
   if(!firebaseReady||!db)return;
@@ -42,9 +46,16 @@ function startRealtimeListeners(){
   if(!firebaseReady||!db){ updateCloudStatusUI(false); return; }
 
   db.collection('users').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    if(rows.length) DB.users=rows;
-    if(currentUser&&currentUser.role==='admin'){try{renderUsersTable()}catch(e){}}
+    var rows=[];
+    snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length){
+      DB.users=rows;
+      saveDB();
+    }
+    if(currentUser&&currentUser.role==='admin'){
+      try{renderUsersTable();}catch(e){}
+      try{populateAdminFilters();}catch(e){}
+    }
   });
   db.collection('clients').onSnapshot(function(snap){
     var rows=[];snap.forEach(function(d){rows.push(d.data())});
@@ -1091,7 +1102,11 @@ function approveExpDirect(id,status){var e=DB.expenses.find(function(x){return x
 // ============================================================
 function renderUsersTable(){
   var h='<table class="tbl"><thead><tr><th>Name</th><th>Designation</th><th>Role</th><th>Salary (₹/mo)</th><th>Update salary</th><th>Update role</th><th>Remove</th></tr></thead><tbody>';
-  DB.users.filter(function(u){return u.name!=='admin'}).forEach(function(u){
+  var staffList=DB.users.filter(function(u){return u.name!=='admin'&&u.name!='admin'});
+  if(!staffList.length){
+    h+='<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">No team members added yet. Add your first team member above.</td></tr>';
+  }
+  staffList.forEach(function(u){
     h+='<tr><td><div style="display:flex;align-items:center;gap:8px"><div class="avatar">'+initials(u.name)+'</div><div><div style="font-size:13px;font-weight:600">'+u.name+'</div><div style="font-size:11px;color:var(--text3)">'+u.desig+'</div></div></div></td>';
     h+='<td style="font-size:11px">'+u.desig+'</td><td><span class="badge '+(u.role==='admin'?'b-accent':'b-navy')+'">'+u.role+'</span></td>';
     h+='<td><b>'+inr(u.salary||0)+'</b></td>';
