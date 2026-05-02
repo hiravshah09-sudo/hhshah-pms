@@ -688,33 +688,38 @@ function doLogin(){
   var btn=document.querySelector('#screen-login .btn-navy');
   if(btn){btn.textContent='Signing in...';btn.disabled=true;}
 
-  function _tryLogin(usersList){
-    var user=usersList.find(function(x){return x.name.toLowerCase()===u.toLowerCase()&&x.password===p});
+  function _finish(usersList){
     if(btn){btn.textContent='Sign In';btn.disabled=false;}
-    if(!user){showAlert('login-alert','Invalid username or password. If you are new, ask admin to add your account.','danger');return}
+    var user=(usersList||[]).find(function(x){
+      return x.name.toLowerCase()===u.toLowerCase()&&x.password===p;
+    });
+    if(!user){showAlert('login-alert','Invalid username or password. Ask admin to add your account.','danger');return}
     currentUser=user;
-    if(user.role==='admin'){showScreen('admin');renderAdmin()}else{showScreen('staff');initStaffView()}
+    if(user.role==='admin'){showScreen('admin');renderAdmin()}
+    else{showScreen('staff');initStaffView()}
   }
 
-  if(firebaseReady && db){
-    // Double-check firebase is truly ready
-    try { db.collection('users'); } catch(e) { firebaseReady=false; }
-  }
+  // Try Firestore with 5 second timeout, fallback to local
+  var done=false;
+  var timer=setTimeout(function(){
+    if(!done){done=true;console.warn('Firestore timeout — using local DB');_finish(DB.users);}
+  },5000);
 
-  if(firebaseReady && db){
-    // Fetch fresh from Firestore — works across ALL devices
+  if(firebaseReady&&db){
     db.collection('users').get().then(function(snap){
-      var rows=[];
-      snap.forEach(function(d){rows.push(d.data())});
-      if(rows.length) DB.users=rows;
-      _tryLogin(DB.users);
+      if(done)return;done=true;clearTimeout(timer);
+      var rows=[];snap.forEach(function(d){rows.push(d.data())});
+      if(rows.length)DB.users=rows;
+      saveDB();
+      _finish(DB.users);
     }).catch(function(e){
-      console.warn('Firestore login fetch failed, using local:',e);
-      _tryLogin(DB.users);
+      if(done)return;done=true;clearTimeout(timer);
+      console.warn('Firestore error:',e.message);
+      _finish(DB.users);
     });
   } else {
-    // No Firebase — local only
-    _tryLogin(DB.users);
+    done=true;clearTimeout(timer);
+    _finish(DB.users);
   }
 }
 function doLogout(){currentUser=null;if(clockInterval)clearInterval(clockInterval);showScreen('login');document.getElementById('inp-user').value='';document.getElementById('inp-pass').value=''}
