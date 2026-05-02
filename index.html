@@ -573,7 +573,7 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "385044603231",
   appId: "1:385044603231:web:ecf9b8e29c1593145c96ea",
   measurementId: "G-541KE94M65"
-;
+};
 
 // ============================================================
 // FIREBASE INIT
@@ -683,44 +683,52 @@ setInterval(function(){var el=document.getElementById('last-sync-time');if(el)el
 // AUTH
 // ============================================================
 function doLogin(){
-  var u=document.getElementById('inp-user').value.trim(),p=document.getElementById('inp-pass').value.trim();
+  var u=document.getElementById('inp-user').value.trim();
+  var p=document.getElementById('inp-pass').value.trim();
   if(!u||!p){showAlert('login-alert','Please enter username and password','danger');return}
-  var btn=document.querySelector('#screen-login .btn-navy');
-  if(btn){btn.textContent='Signing in...';btn.disabled=true;}
 
-  function _finish(usersList){
-    if(btn){btn.textContent='Sign In';btn.disabled=false;}
-    var user=(usersList||[]).find(function(x){
-      return x.name.toLowerCase()===u.toLowerCase()&&x.password===p;
-    });
-    if(!user){showAlert('login-alert','Invalid username or password. Ask admin to add your account.','danger');return}
+  function _auth(list){
+    var found=null;
+    for(var i=0;i<list.length;i++){
+      if(list[i].name.toLowerCase()===u.toLowerCase()&&list[i].password===p){found=list[i];break;}
+    }
+    return found;
+  }
+
+  function _enter(user){
     currentUser=user;
-    if(user.role==='admin'){showScreen('admin');renderAdmin()}
-    else{showScreen('staff');initStaffView()}
+    if(user.role==='admin'){showScreen('admin');renderAdmin();}
+    else{showScreen('staff');initStaffView();}
   }
 
-  // Try Firestore with 5 second timeout, fallback to local
-  var done=false;
-  var timer=setTimeout(function(){
-    if(!done){done=true;console.warn('Firestore timeout — using local DB');_finish(DB.users);}
-  },5000);
+  // Step 1: Try local DB immediately
+  var localUser=_auth(DB.users);
+  if(localUser){_enter(localUser);return;}
 
-  if(firebaseReady&&db){
-    db.collection('users').get().then(function(snap){
-      if(done)return;done=true;clearTimeout(timer);
-      var rows=[];snap.forEach(function(d){rows.push(d.data())});
-      if(rows.length)DB.users=rows;
-      saveDB();
-      _finish(DB.users);
-    }).catch(function(e){
-      if(done)return;done=true;clearTimeout(timer);
-      console.warn('Firestore error:',e.message);
-      _finish(DB.users);
+  // Step 2: Local failed — try Firestore
+  showAlert('login-alert','Checking credentials...','info');
+  if(!firebaseReady||!db){
+    showAlert('login-alert','Invalid username or password','danger');return;
+  }
+
+  db.collection('users').get().then(function(snap){
+    var rows=[];
+    snap.forEach(function(d){
+      var rec=d.data();
+      // Normalise id to number
+      rec.id=parseInt(rec.id)||rec.id;
+      rec.salary=parseFloat(rec.salary)||0;
+      rows.push(rec);
     });
-  } else {
-    done=true;clearTimeout(timer);
-    _finish(DB.users);
-  }
+    console.log('Firestore users fetched:',rows.length,rows.map(function(r){return r.name}));
+    if(rows.length){DB.users=rows;saveDB();}
+    var fsUser=_auth(DB.users);
+    if(fsUser){_enter(fsUser);}
+    else{showAlert('login-alert','Invalid username or password','danger');}
+  }).catch(function(e){
+    console.error('Firestore fetch error:',e);
+    showAlert('login-alert','Connection error. Please try again.','danger');
+  });
 }
 function doLogout(){currentUser=null;if(clockInterval)clearInterval(clockInterval);showScreen('login');document.getElementById('inp-user').value='';document.getElementById('inp-pass').value=''}
 function showScreen(n){document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active')});document.getElementById('screen-'+n).classList.add('active')}
