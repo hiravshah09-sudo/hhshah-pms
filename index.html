@@ -667,43 +667,24 @@ var currentUser = null, clockInterval = null, lastPayrollData = [];
 // LOCAL STORAGE PERSISTENCE
 // ============================================================
 function saveDB(){
+  // Only save nextId to localStorage - all other data lives in Firestore
   try{
-    localStorage.setItem('hhshah_users', JSON.stringify(DB.users));
-    localStorage.setItem('hhshah_clients', JSON.stringify(DB.clients));
-    localStorage.setItem('hhshah_taskTypes', JSON.stringify(DB.taskTypes));
-    localStorage.setItem('hhshah_attendance', JSON.stringify(DB.attendance));
-    localStorage.setItem('hhshah_tasks', JSON.stringify(DB.tasks));
-    localStorage.setItem('hhshah_expenses', JSON.stringify(DB.expenses));
-    localStorage.setItem('hhshah_bills', JSON.stringify(DB.bills));
     localStorage.setItem('hhshah_nextId', JSON.stringify(DB.nextId));
-  }catch(e){console.warn('Storage save failed:',e)}
+    // Clear any old stale data that might cause conflicts
+    ['hhshah_users','hhshah_clients','hhshah_taskTypes',
+     'hhshah_attendance','hhshah_tasks','hhshah_expenses','hhshah_bills']
+    .forEach(function(k){localStorage.removeItem(k);});
+  }catch(e){}
 }
 
 function loadDB(){
+  // localStorage is disabled as primary source to prevent data conflicts across devices
+  // All data comes from Firestore. localStorage only used if Firestore completely unavailable.
   try{
-    var u=localStorage.getItem('hhshah_users');
-    var c=localStorage.getItem('hhshah_clients');
-    var tt=localStorage.getItem('hhshah_taskTypes');
-    var att=localStorage.getItem('hhshah_attendance');
-    var tasks=localStorage.getItem('hhshah_tasks');
-    var exp=localStorage.getItem('hhshah_expenses');
-    var bills=localStorage.getItem('hhshah_bills');
     var nid=localStorage.getItem('hhshah_nextId');
-    var parsed;
-    if(u){parsed=JSON.parse(u);if(Array.isArray(parsed))DB.users=parsed;}
-    if(c){parsed=JSON.parse(c);if(Array.isArray(parsed))DB.clients=parsed;}
-    if(tt){parsed=JSON.parse(tt);if(Array.isArray(parsed))DB.taskTypes=parsed;}
-    if(att){parsed=JSON.parse(att);if(Array.isArray(parsed))DB.attendance=parsed;}
-    if(tasks){parsed=JSON.parse(tasks);if(Array.isArray(parsed))DB.tasks=parsed;}
-    if(exp){parsed=JSON.parse(exp);if(Array.isArray(parsed))DB.expenses=parsed;}
-    if(bills){parsed=JSON.parse(bills);if(Array.isArray(parsed))DB.bills=parsed;}
-    if(nid){parsed=JSON.parse(nid);if(typeof parsed==='number')DB.nextId=parsed;}
-    console.log('localStorage loaded. Users:',DB.users.length);
-  }catch(e){
-    console.warn('Storage load failed:',e.message);
-    // Clear corrupted storage
-    try{localStorage.clear();}catch(x){}
-  }
+    if(nid){var parsed=JSON.parse(nid);if(typeof parsed==='number')DB.nextId=parsed;}
+  }catch(e){}
+  console.log('loadDB: Firestore is primary data source');
 }
 
 // Firebase startup handled below after all functions are defined
@@ -736,6 +717,12 @@ function doLogin(){
   if(!u||!p){showAlert('login-alert','Please enter username and password','danger');return}
   var btn=document.querySelector('#screen-login .btn-navy');
   if(btn){btn.textContent='Connecting...';btn.disabled=true;}
+  // Clear any stale localStorage data before fetching fresh from Firestore
+  try{
+    ['hhshah_users','hhshah_clients','hhshah_taskTypes',
+     'hhshah_attendance','hhshah_tasks','hhshah_expenses','hhshah_bills']
+    .forEach(function(k){localStorage.removeItem(k);});
+  }catch(e){}
 
   function resetBtn(){if(btn){btn.textContent='Sign In';btn.disabled=false;}}
 
@@ -760,6 +747,9 @@ function doLogin(){
       else{showScreen('staff');initStaffView();}
       return;
     }
+    // Reset all local arrays before loading fresh from Firestore
+    DB.attendance=[];DB.tasks=[];DB.expenses=[];DB.bills=[];
+    DB.users=[currentUser]; // keep current user at minimum
     // Fetch all collections fresh
     Promise.all([
       db.collection('users').get(),
