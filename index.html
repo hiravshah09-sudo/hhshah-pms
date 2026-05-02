@@ -566,13 +566,35 @@ select.inp{cursor:pointer}textarea.inp{height:64px;resize:vertical}
 // Get this from Firebase Console > Project Settings > Your apps
 // ============================================================
 const FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
-};
+  apiKey: "AIzaSyDYarcs9W9zhq4HEtnr4P0C1aPlcsMCsCk",
+  authDomain: "hhs-office.firebaseapp.com",
+  projectId: "hhs-office",
+  storageBucket: "hhs-office.firebasestorage.app",
+  messagingSenderId: "385044603231",
+  appId: "1:385044603231:web:ecf9b8e29c1593145c96ea",
+  measurementId: "G-541KE94M65"
+;
+
+// ============================================================
+// FIREBASE INIT
+// ============================================================
+var db = null;
+var firebaseReady = false;
+
+try {
+  if (!firebase.apps || firebase.apps.length === 0) {
+    firebase.initializeApp(FIREBASE_CONFIG);
+  }
+  db = firebase.firestore();
+  db.enablePersistence({synchronizeTabs:true}).catch(function(err){
+    console.warn('Persistence:', err.code);
+  });
+  firebaseReady = true;
+  console.log("Firebase connected OK — project: hhs-office");
+} catch(e) {
+  console.warn("Firebase init error:", e.message);
+  firebaseReady = false;
+}
 
 // ============================================================
 // LOCAL FALLBACK DATABASE (works without Firebase)
@@ -672,6 +694,11 @@ function doLogin(){
     if(!user){showAlert('login-alert','Invalid username or password. If you are new, ask admin to add your account.','danger');return}
     currentUser=user;
     if(user.role==='admin'){showScreen('admin');renderAdmin()}else{showScreen('staff');initStaffView()}
+  }
+
+  if(firebaseReady && db){
+    // Double-check firebase is truly ready
+    try { db.collection('users'); } catch(e) { firebaseReady=false; }
   }
 
   if(firebaseReady && db){
