@@ -4,158 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>H H Shah & Co. — Practice Management System</title>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js">
-// ============================================================
-// FIREBASE HELPER FUNCTIONS
-// ============================================================
-function col(name){ return db ? db.collection(name) : null; }
-
-function cloudSave(collName, record){
-  if(!firebaseReady||!db)return;
-  try{ 
-    db.collection(collName).doc(String(record.id)).set(record)
-      .then(function(){ console.log('Saved to Firestore:',collName,record.id); })
-      .catch(function(e){ console.error('cloudSave error:',collName,e); });
-  }catch(e){ console.warn('cloudSave error:',e); }
-}
-function cloudDelete(collName, id){
-  if(!firebaseReady||!db)return;
-  try{ db.collection(collName).doc(String(id)).delete(); }catch(e){}
-}
-function cloudUpdate(collName, id, data){
-  if(!firebaseReady||!db)return;
-  try{ db.collection(collName).doc(String(id)).update(data); }catch(e){}
-}
-function bumpCounter(){
-  if(!firebaseReady||!db)return;
-  try{ db.collection('meta').doc('counter').set({nextId:DB.nextId}); }catch(e){}
-}
-
-function updateCloudStatusUI(online){
-  var el=document.getElementById('cloud-status-text');
-  if(el) el.textContent=online?'Connected — real-time sync active':'Local mode — data saved on this device only';
-  var dot=document.querySelector('.online-dot');
-  if(dot) dot.style.background=online?'#27ae60':'#e84c1e';
-  var loginWarn=document.getElementById('cloud-login-status');
-  if(loginWarn) loginWarn.style.display=online?'none':'block';
-  var banner=document.getElementById('firebase-setup-banner');
-  if(banner) banner.style.display=online?'none':'block';
-}
-
-function startRealtimeListeners(){
-  if(!firebaseReady||!db){ updateCloudStatusUI(false); return; }
-
-  db.collection('users').onSnapshot(function(snap){
-    var rows=[];
-    snap.forEach(function(d){rows.push(d.data())});
-    if(rows.length){
-      DB.users=rows;
-      saveDB();
-    }
-    if(currentUser&&currentUser.role==='admin'){
-      try{renderUsersTable();}catch(e){}
-      try{populateAdminFilters();}catch(e){}
-    }
-  });
-  db.collection('clients').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    if(rows.length) DB.clients=rows;
-    populateTaskDropdowns();populateAdminFilters();
-  });
-  db.collection('taskTypes').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    if(rows.length) DB.taskTypes=rows.map(function(r){return r.name});
-    populateTaskDropdowns();
-  });
-  db.collection('attendance').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    DB.attendance=rows;
-    if(currentUser){updatePunchUI(getTodayAtt(currentUser.id));renderMyAttSummary();}
-    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
-  });
-  db.collection('tasks').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    DB.tasks=rows;
-    if(currentUser){try{renderMyTasks()}catch(e){}}
-    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
-  });
-  db.collection('expenses').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    DB.expenses=rows;
-    if(currentUser){try{renderMyExpenses()}catch(e){}}
-    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
-  });
-  db.collection('bills').onSnapshot(function(snap){
-    var rows=[];snap.forEach(function(d){rows.push(d.data())});
-    DB.bills=rows;
-  });
-  db.collection('meta').doc('counter').onSnapshot(function(doc){
-    if(doc.exists){var d=doc.data();if(d.nextId>DB.nextId)DB.nextId=d.nextId;}
-  });
-  updateCloudStatusUI(true);
-  console.log('Real-time listeners active');
-}
-
-function pushInitialData(){
-  if(!firebaseReady||!db){
-    showAlert('user-alert','Firebase not connected. Check your config.','danger');
-    return;
-  }
-  var promises=[];
-  DB.users.forEach(function(r){ promises.push(db.collection('users').doc(String(r.id)).set(r)) });
-  DB.clients.forEach(function(r){ promises.push(db.collection('clients').doc(String(r.id)).set(r)) });
-  DB.taskTypes.forEach(function(t,i){ promises.push(db.collection('taskTypes').doc('tt'+i).set({id:'tt'+i,name:t})) });
-  promises.push(db.collection('meta').doc('counter').set({nextId:DB.nextId}));
-  Promise.all(promises).then(function(){
-    showAlert('user-alert','All data pushed to cloud successfully! All devices will now sync.','success');
-    console.log('All data pushed to Firestore');
-  }).catch(function(e){
-    showAlert('user-alert','Push failed: '+e.message,'danger');
-    console.error('Push error:',e);
-  });
-}
-
-// ── Startup: load from Firestore then start listeners ────────────────────────
-(function(){
-  if(firebaseReady && db){
-    Promise.all([
-      db.collection('users').get(),
-      db.collection('clients').get(),
-      db.collection('taskTypes').get(),
-      db.collection('attendance').get(),
-      db.collection('tasks').get(),
-      db.collection('expenses').get(),
-      db.collection('bills').get(),
-      db.collection('meta').doc('counter').get()
-    ]).then(function(results){
-      var users=[],clients=[],tts=[],att=[],tasks=[],exp=[],bills=[];
-      results[0].forEach(function(d){users.push(d.data())});
-      results[1].forEach(function(d){clients.push(d.data())});
-      results[2].forEach(function(d){tts.push(d.data())});
-      results[3].forEach(function(d){att.push(d.data())});
-      results[4].forEach(function(d){tasks.push(d.data())});
-      results[5].forEach(function(d){exp.push(d.data())});
-      results[6].forEach(function(d){bills.push(d.data())});
-      if(users.length) DB.users=users;
-      if(clients.length) DB.clients=clients;
-      if(tts.length) DB.taskTypes=tts.map(function(r){return r.name});
-      if(att.length) DB.attendance=att;
-      if(tasks.length) DB.tasks=tasks;
-      if(exp.length) DB.expenses=exp;
-      if(bills.length) DB.bills=bills;
-      if(results[7].exists){var ct=results[7].data();if(ct.nextId>DB.nextId)DB.nextId=ct.nextId;}
-      console.log('Firestore load done. Users:', DB.users.length);
-      startRealtimeListeners();
-    }).catch(function(e){
-      console.warn('Firestore load failed, local mode:',e);
-      updateCloudStatusUI(false);
-    });
-  } else {
-    updateCloudStatusUI(false);
-  }
-})();
-
-</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
@@ -512,7 +361,7 @@ select.inp{cursor:pointer}textarea.inp{height:64px;resize:vertical}
         <div class="alert alert-info" style="font-size:12px">
           <b>First time setup:</b> After pasting your Firebase config in the HTML file, click <b>Push data to cloud</b> once to upload all users, clients and task types to Firestore. After that, all devices will sync automatically.
         </div>
-        <button class="btn btn-navy" onclick="pushInitialData();showAlert('user-alert','Data pushed to Firebase cloud!','success')">Push data to cloud (first-time setup)</button>
+        <button class="btn btn-navy" id="push-btn" onclick="pushInitialData()">Push data to cloud (first-time setup)</button>
       </div>
       <div class="card">
         <div class="card-title"><span class="card-title-bar"></span>Add team member</div>
@@ -581,6 +430,163 @@ select.inp{cursor:pointer}textarea.inp{height:64px;resize:vertical}
 </div>
 
 <script>
+// ============================================================
+// FIREBASE HELPER FUNCTIONS
+// ============================================================
+function col(name){ return db ? db.collection(name) : null; }
+
+function cloudSave(collName, record){
+  if(!firebaseReady||!db)return;
+  try{ 
+    db.collection(collName).doc(String(record.id)).set(record)
+      .then(function(){ console.log('Saved to Firestore:',collName,record.id); })
+      .catch(function(e){ console.error('cloudSave error:',collName,e); });
+  }catch(e){ console.warn('cloudSave error:',e); }
+}
+function cloudDelete(collName, id){
+  if(!firebaseReady||!db)return;
+  try{ db.collection(collName).doc(String(id)).delete(); }catch(e){}
+}
+function cloudUpdate(collName, id, data){
+  if(!firebaseReady||!db)return;
+  try{ db.collection(collName).doc(String(id)).update(data); }catch(e){}
+}
+function bumpCounter(){
+  if(!firebaseReady||!db)return;
+  try{ db.collection('meta').doc('counter').set({nextId:DB.nextId}); }catch(e){}
+}
+
+function updateCloudStatusUI(online){
+  var el=document.getElementById('cloud-status-text');
+  if(el) el.textContent=online?'Connected — real-time sync active':'Local mode — data saved on this device only';
+  var dot=document.querySelector('.online-dot');
+  if(dot) dot.style.background=online?'#27ae60':'#e84c1e';
+  var loginWarn=document.getElementById('cloud-login-status');
+  if(loginWarn) loginWarn.style.display=online?'none':'block';
+  var banner=document.getElementById('firebase-setup-banner');
+  if(banner) banner.style.display=online?'none':'block';
+}
+
+function startRealtimeListeners(){
+  if(!firebaseReady||!db){ updateCloudStatusUI(false); return; }
+
+  db.collection('users').onSnapshot(function(snap){
+    var rows=[];
+    snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length){
+      // Merge: keep any local users not yet in Firestore
+      var fsIds=rows.map(function(r){return String(r.id)});
+      var localOnly=DB.users.filter(function(u){return fsIds.indexOf(String(u.id))===-1});
+      DB.users=rows.concat(localOnly);
+      saveDB();
+    }
+    if(currentUser&&currentUser.role==='admin'){
+      try{renderUsersTable();}catch(e){}
+      try{populateAdminFilters();}catch(e){}
+    }
+  });
+  db.collection('clients').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length) DB.clients=rows;
+    populateTaskDropdowns();populateAdminFilters();
+  });
+  db.collection('taskTypes').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length) DB.taskTypes=rows.map(function(r){return r.name});
+    populateTaskDropdowns();
+  });
+  db.collection('attendance').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.attendance=rows;
+    if(currentUser){updatePunchUI(getTodayAtt(currentUser.id));renderMyAttSummary();}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('tasks').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.tasks=rows;
+    if(currentUser){try{renderMyTasks()}catch(e){}}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('expenses').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.expenses=rows;
+    if(currentUser){try{renderMyExpenses()}catch(e){}}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('bills').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.bills=rows;
+  });
+  db.collection('meta').doc('counter').onSnapshot(function(doc){
+    if(doc.exists){var d=doc.data();if(d.nextId>DB.nextId)DB.nextId=d.nextId;}
+  });
+  updateCloudStatusUI(true);
+  console.log('Real-time listeners active');
+}
+
+function pushInitialData(){
+  if(!firebaseReady||!db){
+    showAlert('user-alert','Firebase not connected. Check your config.','danger');
+    return;
+  }
+  var promises=[];
+  DB.users.forEach(function(r){ promises.push(db.collection('users').doc(String(r.id)).set(r)) });
+  DB.clients.forEach(function(r){ promises.push(db.collection('clients').doc(String(r.id)).set(r)) });
+  DB.taskTypes.forEach(function(t,i){ promises.push(db.collection('taskTypes').doc('tt'+i).set({id:'tt'+i,name:t})) });
+  promises.push(db.collection('meta').doc('counter').set({nextId:DB.nextId}));
+  Promise.all(promises).then(function(){
+    showAlert('user-alert','All data pushed to cloud successfully! All devices will now sync.','success');
+    console.log('All data pushed to Firestore');
+  }).catch(function(e){
+    showAlert('user-alert','Push failed: '+e.message,'danger');
+    console.error('Push error:',e);
+  });
+}
+
+// ── Startup: load from Firestore then start listeners ────────────────────────
+(function(){
+  if(firebaseReady && db){
+    Promise.all([
+      db.collection('users').get(),
+      db.collection('clients').get(),
+      db.collection('taskTypes').get(),
+      db.collection('attendance').get(),
+      db.collection('tasks').get(),
+      db.collection('expenses').get(),
+      db.collection('bills').get(),
+      db.collection('meta').doc('counter').get()
+    ]).then(function(results){
+      var users=[],clients=[],tts=[],att=[],tasks=[],exp=[],bills=[];
+      results[0].forEach(function(d){users.push(d.data())});
+      results[1].forEach(function(d){clients.push(d.data())});
+      results[2].forEach(function(d){tts.push(d.data())});
+      results[3].forEach(function(d){att.push(d.data())});
+      results[4].forEach(function(d){tasks.push(d.data())});
+      results[5].forEach(function(d){exp.push(d.data())});
+      results[6].forEach(function(d){bills.push(d.data())});
+      if(users.length) DB.users=users;
+      if(clients.length) DB.clients=clients;
+      if(tts.length) DB.taskTypes=tts.map(function(r){return r.name});
+      if(att.length) DB.attendance=att;
+      if(tasks.length) DB.tasks=tasks;
+      if(exp.length) DB.expenses=exp;
+      if(bills.length) DB.bills=bills;
+      if(results[7].exists){var ct=results[7].data();if(ct.nextId>DB.nextId)DB.nextId=ct.nextId;}
+      console.log('Firestore load done. Users:', DB.users.length);
+      startRealtimeListeners();
+    }).catch(function(e){
+      console.warn('Firestore load failed, local mode:',e);
+      updateCloudStatusUI(false);
+    });
+  } else {
+    updateCloudStatusUI(false);
+  }
+})();
+
+// ============================================================
+// MAIN APPLICATION
+// ============================================================
+
 // ============================================================
 // FIREBASE CONFIG — Replace with your actual Firebase project config
 // Get this from Firebase Console > Project Settings > Your apps
@@ -1139,14 +1145,41 @@ function updateRole(id){
   }
 }
 function addUser(){
-  var name=document.getElementById('new-username').value.trim(),pass=document.getElementById('new-password').value.trim(),role=document.getElementById('new-role').value,desig=document.getElementById('new-desig').value.trim(),salary=parseFloat(document.getElementById('new-salary').value)||0;
+  var name=document.getElementById('new-username').value.trim();
+  var pass=document.getElementById('new-password').value.trim();
+  var role=document.getElementById('new-role').value;
+  var desig=document.getElementById('new-desig').value.trim();
+  var salary=parseFloat(document.getElementById('new-salary').value)||0;
   if(!name||!pass){showAlert('user-alert','Name and password required','danger');return}
-  if(DB.users.find(function(u){return u.name.toLowerCase()===name.toLowerCase()})){showAlert('user-alert','User already exists','danger');return}
-  var _usr={id:DB.nextId++,name:name,password:pass,role:role,desig:desig,salary:salary};
-  DB.users.push(_usr);saveDB();cloudSave('users',_usr);bumpCounter();
-  showAlert('user-alert',name+' added successfully!','success');console.log('User added:',name,'Total users:',DB.users.length);
-  ['new-username','new-password','new-desig','new-salary'].forEach(function(id){document.getElementById(id).value=''});
-  renderUsersTable();populateAdminFilters();
+  var exists=DB.users.find(function(u){return u.name.toLowerCase()===name.toLowerCase()});
+  if(exists){showAlert('user-alert',name+' already exists','danger');return}
+  var newId=Date.now(); // Use timestamp as unique ID — never conflicts
+  var _usr={id:newId,name:name,password:pass,role:role,desig:desig,salary:salary};
+  // Save to local immediately
+  DB.users.push(_usr);
+  saveDB();
+  // Clear form
+  document.getElementById('new-username').value='';
+  document.getElementById('new-password').value='';
+  document.getElementById('new-desig').value='';
+  document.getElementById('new-salary').value='';
+  // Render immediately from local
+  renderUsersTable();
+  populateAdminFilters();
+  showAlert('user-alert',name+' added!','success');
+  // Save to Firestore async — don't wait for it
+  if(firebaseReady&&db){
+    db.collection('users').doc(String(newId)).set(_usr)
+      .then(function(){
+        console.log('User saved to Firestore:',name);
+        DB.nextId=newId+1;
+        db.collection('meta').doc('counter').set({nextId:DB.nextId});
+      })
+      .catch(function(e){
+        console.error('Firestore save failed:',e);
+        showAlert('user-alert','Saved locally. Cloud sync will retry.','info');
+      });
+  }
 }
 function removeUser(id){DB.users=DB.users.filter(function(u){return u.id!==id});saveDB();cloudDelete('users',id);renderUsersTable()}
 
