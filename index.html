@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>H H Shah & Co. — Practice Management System</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js">
+// ============================================================
+// FIREBASE HELPER FUNCTIONS
+// ============================================================
+function col(name){ return db ? db.collection(name) : null; }
+
+function cloudSave(collName, record){
+  if(!firebaseReady||!db)return;
+  try{ db.collection(collName).doc(String(record.id)).set(record); }catch(e){ console.warn('cloudSave error:',e); }
+}
+function cloudDelete(collName, id){
+  if(!firebaseReady||!db)return;
+  try{ db.collection(collName).doc(String(id)).delete(); }catch(e){}
+}
+function cloudUpdate(collName, id, data){
+  if(!firebaseReady||!db)return;
+  try{ db.collection(collName).doc(String(id)).update(data); }catch(e){}
+}
+function bumpCounter(){
+  if(!firebaseReady||!db)return;
+  try{ db.collection('meta').doc('counter').set({nextId:DB.nextId}); }catch(e){}
+}
+
+function updateCloudStatusUI(online){
+  var el=document.getElementById('cloud-status-text');
+  if(el) el.textContent=online?'Connected — real-time sync active':'Local mode — data saved on this device only';
+  var dot=document.querySelector('.online-dot');
+  if(dot) dot.style.background=online?'#27ae60':'#e84c1e';
+  var loginWarn=document.getElementById('cloud-login-status');
+  if(loginWarn) loginWarn.style.display=online?'none':'block';
+  var banner=document.getElementById('firebase-setup-banner');
+  if(banner) banner.style.display=online?'none':'block';
+}
+
+function startRealtimeListeners(){
+  if(!firebaseReady||!db){ updateCloudStatusUI(false); return; }
+
+  db.collection('users').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length) DB.users=rows;
+    if(currentUser&&currentUser.role==='admin'){try{renderUsersTable()}catch(e){}}
+  });
+  db.collection('clients').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length) DB.clients=rows;
+    populateTaskDropdowns();populateAdminFilters();
+  });
+  db.collection('taskTypes').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    if(rows.length) DB.taskTypes=rows.map(function(r){return r.name});
+    populateTaskDropdowns();
+  });
+  db.collection('attendance').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.attendance=rows;
+    if(currentUser){updatePunchUI(getTodayAtt(currentUser.id));renderMyAttSummary();}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('tasks').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.tasks=rows;
+    if(currentUser){try{renderMyTasks()}catch(e){}}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('expenses').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.expenses=rows;
+    if(currentUser){try{renderMyExpenses()}catch(e){}}
+    if(currentUser&&currentUser.role==='admin'){try{renderAdmin()}catch(e){}}
+  });
+  db.collection('bills').onSnapshot(function(snap){
+    var rows=[];snap.forEach(function(d){rows.push(d.data())});
+    DB.bills=rows;
+  });
+  db.collection('meta').doc('counter').onSnapshot(function(doc){
+    if(doc.exists){var d=doc.data();if(d.nextId>DB.nextId)DB.nextId=d.nextId;}
+  });
+  updateCloudStatusUI(true);
+  console.log('Real-time listeners active');
+}
+
+function pushInitialData(){
+  if(!firebaseReady||!db){ alert('Firebase not configured. Please add your Firebase config first.'); return; }
+  DB.users.forEach(function(r){ db.collection('users').doc(String(r.id)).set(r) });
+  DB.clients.forEach(function(r){ db.collection('clients').doc(String(r.id)).set(r) });
+  DB.taskTypes.forEach(function(t,i){ db.collection('taskTypes').doc('tt'+i).set({id:'tt'+i,name:t}) });
+  db.collection('meta').doc('counter').set({nextId:DB.nextId});
+  alert('Data pushed to Firebase! All devices will now sync.');
+  console.log('Initial data pushed to Firestore');
+}
+
+// ── Startup: load from Firestore then start listeners ────────────────────────
+(function(){
+  if(firebaseReady && db){
+    Promise.all([
+      db.collection('users').get(),
+      db.collection('clients').get(),
+      db.collection('taskTypes').get(),
+      db.collection('attendance').get(),
+      db.collection('tasks').get(),
+      db.collection('expenses').get(),
+      db.collection('bills').get(),
+      db.collection('meta').doc('counter').get()
+    ]).then(function(results){
+      var users=[],clients=[],tts=[],att=[],tasks=[],exp=[],bills=[];
+      results[0].forEach(function(d){users.push(d.data())});
+      results[1].forEach(function(d){clients.push(d.data())});
+      results[2].forEach(function(d){tts.push(d.data())});
+      results[3].forEach(function(d){att.push(d.data())});
+      results[4].forEach(function(d){tasks.push(d.data())});
+      results[5].forEach(function(d){exp.push(d.data())});
+      results[6].forEach(function(d){bills.push(d.data())});
+      if(users.length) DB.users=users;
+      if(clients.length) DB.clients=clients;
+      if(tts.length) DB.taskTypes=tts.map(function(r){return r.name});
+      if(att.length) DB.attendance=att;
+      if(tasks.length) DB.tasks=tasks;
+      if(exp.length) DB.expenses=exp;
+      if(bills.length) DB.bills=bills;
+      if(results[7].exists){var ct=results[7].data();if(ct.nextId>DB.nextId)DB.nextId=ct.nextId;}
+      console.log('Firestore load done. Users:', DB.users.length);
+      startRealtimeListeners();
+    }).catch(function(e){
+      console.warn('Firestore load failed, local mode:',e);
+      updateCloudStatusUI(false);
+    });
+  } else {
+    updateCloudStatusUI(false);
+  }
+})();
+
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',Arial,sans-serif}
+:root{
+  --navy:#1a2e5a;--navy-dark:#0f1e3d;--navy-light:#2a4580;
+  --accent:#e84c1e;--accent-light:#f5e8e4;--gold:#c9a227;
+  --surface:#f4f6fb;--surface2:#eef1f8;--white:#ffffff;
+  --text:#1a2e5a;--text2:#4a5568;--text3:#8896a8;
+  --border:#dce3f0;--border2:#c5cfdf;
+  --success:#1a7a4a;--success-bg:#e6f5ed;
+  --warning:#8a5c00;--warning-bg:#fef8e7;
+  --danger:#a32d2d;--danger-bg:#fdf0f0;
+  --info:#0c447c;--info-bg:#e6f1fb;
+}
+body{background:#e8edf5;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:20px}
+.app{width:100%;max-width:1100px;background:var(--white);border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(26,46,90,0.10)}
+.screen{display:none}.screen.active{display:block}
+.app-header{background:var(--navy);padding:13px 20px;display:flex;align-items:center;justify-content:space-between}
+.firm-name{color:#fff;font-size:17px;font-weight:700}
+.firm-sub{color:#a8b8d8;font-size:11px;margin-top:2px}
+.logo-wrap{background:#fff;border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center}
+.body-wrap{background:var(--surface);padding:16px}
+.login-wrap{background:var(--surface);padding:40px 20px;min-height:420px;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--white);border-radius:14px;border:1px solid var(--border);padding:32px;width:100%;max-width:400px}
+.login-logo-row{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:20px}
+.login-firm-name{font-size:19px;font-weight:800;color:var(--navy)}
+.login-firm-sub{font-size:11px;color:var(--text3);margin-top:2px}
+.login-title{text-align:center;font-size:15px;font-weight:700;color:var(--navy);margin-bottom:3px}
+.login-subtitle{text-align:center;font-size:12px;color:var(--text3);margin-bottom:18px}
+.lbl{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:0.4px}
+.inp{width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;color:var(--text);background:var(--white);margin-bottom:14px;transition:border 0.2s}
+.inp:focus{outline:none;border-color:var(--navy)}
+select.inp{cursor:pointer}textarea.inp{height:64px;resize:vertical}
+.btn{padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn-navy{background:var(--navy);color:#fff}.btn-navy:hover{background:var(--navy-dark)}
+.btn-outline{background:transparent;color:var(--navy);border:1.5px solid var(--border2)}.btn-outline:hover{background:var(--surface2)}
+.btn-success{background:var(--success);color:#fff}
+.btn-danger-soft{background:var(--danger-bg);color:var(--danger);border:1px solid #f5c5c5}
+.btn-warn{background:var(--warning-bg);color:var(--warning);border:1px solid #f0d080}
+.btn-sm{padding:5px 12px;font-size:12px}
+.btn-full{width:100%}
+.badge{display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600}
+.b-success{background:var(--success-bg);color:var(--success)}
+.b-warning{background:var(--warning-bg);color:var(--warning)}
+.b-danger{background:var(--danger-bg);color:var(--danger)}
+.b-info{background:var(--info-bg);color:var(--info)}
+.b-navy{background:#e8ecf5;color:var(--navy)}
+.b-accent{background:var(--accent-light);color:#993010}
+.alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px;font-weight:500}
+.alert-success{background:var(--success-bg);color:var(--success);border-left:3px solid var(--success)}
+.alert-danger{background:var(--danger-bg);color:var(--danger);border-left:3px solid var(--danger)}
+.alert-info{background:var(--info-bg);color:var(--info);border-left:3px solid var(--info)}
+.tab-bar{display:flex;background:var(--white);border-bottom:2px solid var(--border);margin-bottom:16px;border-radius:8px 8px 0 0;overflow:hidden}
+.tab-item{flex:1;padding:10px 4px;text-align:center;font-size:12px;font-weight:600;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all 0.2s}
+.tab-item.active{color:var(--navy);border-bottom-color:var(--navy);background:var(--surface2)}
+.tab-item:hover:not(.active){color:var(--text2);background:var(--surface)}
+.admin-sidebar{display:flex;background:var(--navy);border-radius:10px;margin-bottom:16px;overflow:hidden;flex-wrap:wrap}
+.side-btn{flex:1;min-width:80px;padding:9px 4px;text-align:center;font-size:11px;font-weight:600;color:#a8b8d8;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s}
+.side-btn.active{color:#fff;background:var(--navy-light);border-bottom-color:var(--accent)}
+.side-btn:hover:not(.active){color:#fff;background:rgba(255,255,255,0.08)}
+.card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.card-title{font-size:14px;font-weight:700;color:var(--navy);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.card-title-bar{width:3px;height:16px;background:var(--accent);border-radius:2px;display:inline-block}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.metric{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid var(--navy)}
+.metric-val{font-size:24px;font-weight:700;color:var(--navy)}
+.metric-lbl{font-size:11px;color:var(--text3);margin-top:3px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px}
+.metric.accent{border-top-color:var(--accent)}.metric.success{border-top-color:var(--success)}.metric.gold{border-top-color:var(--gold)}
+.punch-area{background:var(--navy);border-radius:12px;padding:22px;text-align:center;margin-bottom:14px}
+.punch-time{font-size:34px;font-weight:700;color:#fff;letter-spacing:2px}
+.punch-date{font-size:12px;color:#a8b8d8;margin-top:4px;margin-bottom:16px}
+.punch-status{display:inline-block;background:rgba(255,255,255,0.12);color:#fff;padding:4px 14px;border-radius:20px;font-size:12px;font-weight:600;margin-bottom:16px}
+.punch-btns{display:flex;gap:10px;justify-content:center}
+.btn-punch-in{background:#27ae60;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer}
+.btn-punch-in:disabled{background:#5a7a68;cursor:not-allowed}
+.btn-punch-out{background:var(--accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer}
+.btn-punch-out:disabled{background:#8a5a4a;cursor:not-allowed}
+.punch-msg{color:#a8b8d8;font-size:12px;margin-top:10px}
+.tbl-wrap{overflow-x:auto}
+.tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:500px}
+.tbl th{text-align:left;padding:9px 12px;background:var(--surface2);color:var(--navy);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid var(--border)}
+.tbl td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--surface)}
+.tbl tfoot td{background:var(--surface2);font-weight:700;color:var(--navy);padding:9px 12px;border-top:2px solid var(--border)}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--navy);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.filter-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:14px;background:var(--surface2);border-radius:10px}
+.filter-row .inp{margin-bottom:0}
+.filter-item{flex:1;min-width:110px}
+.exp-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.file-thumb{width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer}
+.file-doc{background:var(--info-bg);color:var(--info);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.cloud-banner{background:linear-gradient(135deg,#1a2e5a,#2a4580);color:#fff;padding:10px 16px;border-radius:10px;margin-bottom:14px;font-size:12px;display:flex;align-items:center;gap:10px}
+.online-dot{width:8px;height:8px;border-radius:50%;background:#27ae60;display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.bill-client-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.bill-client-name{font-size:14px;font-weight:700;color:var(--navy);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.bill-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px}
+.bill-row:last-child{border-bottom:none}
+.bill-total{display:flex;justify-content:space-between;font-weight:700;font-size:14px;color:var(--navy);padding:8px 0;border-top:2px solid var(--border);margin-top:4px}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--white);border-radius:14px;padding:24px;width:90%;max-width:460px;max-height:80vh;overflow-y:auto}
+.modal-title{font-size:15px;font-weight:700;color:var(--navy);margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
+.modal-close{cursor:pointer;color:var(--text3);font-size:20px;line-height:1}
+@media print{body{background:none;padding:0}.no-print{display:none!important}.print-only{display:block!important}}
+.print-only{display:none}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- FIREBASE CONFIG BANNER -->
+<div id="firebase-setup-banner" style="background:#fff3cd;border:1px solid #ffc107;padding:12px 16px;font-size:12px;color:#856404;display:none">
+  <b>Cloud Setup Required:</b> Please add your Firebase config in the script section (see deployment guide). Data is currently stored locally only.
+</div>
+
+<!-- LOGIN -->
+<div id="screen-login" class="screen active">
+  <div style="background:var(--navy);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;border-radius:0">
+    <div><div style="color:#fff;font-size:17px;font-weight:700">H H Shah &amp; Co.</div><div style="color:#a8b8d8;font-size:11px;margin-top:2px">Cost Accountants, Alkapuri, Vadodara</div></div>
+    <div class="logo-wrap"><svg width="80" height="34" viewBox="0 0 200 84" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="84" rx="8" fill="#5b3f9e"/><rect x="10" y="10" width="10" height="64" rx="3" fill="#138808"/><rect x="10" y="10" width="10" height="22" rx="3" fill="#FF9933"/><rect x="10" y="31" width="10" height="22" fill="#ffffff"/><rect x="10" y="52" width="10" height="22" rx="3" fill="#138808"/><text x="28" y="66" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="52" fill="#ffffff">CMA</text><polygon points="158,4 186,4 186,32 158,32" fill="#f7941d"/><polyline points="163,20 172,29 188,10" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  </div>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo-row">
+        <div class="logo-wrap" style="background:var(--surface2);padding:6px 10px"><svg width="64" height="27" viewBox="0 0 200 84" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="84" rx="8" fill="#5b3f9e"/><rect x="10" y="10" width="10" height="64" rx="3" fill="#138808"/><rect x="10" y="10" width="10" height="22" rx="3" fill="#FF9933"/><rect x="10" y="31" width="10" height="22" fill="#ffffff"/><rect x="10" y="52" width="10" height="22" rx="3" fill="#138808"/><text x="28" y="66" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="52" fill="#ffffff">CMA</text><polygon points="158,4 186,4 186,32 158,32" fill="#f7941d"/><polyline points="163,20 172,29 188,10" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div><div class="login-firm-name">H H Shah &amp; Co.</div><div class="login-firm-sub">Cost Accountants, Vadodara</div></div>
+      </div>
+      <div class="login-title">Practice Management System</div>
+      <div class="login-subtitle">Sign in to continue to your workspace</div>
+      <div id="cloud-login-status" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:500;background:var(--warning-bg);color:var(--warning);border-left:3px solid var(--gold)">
+        ⚠ Running in local mode — data is not shared across devices. Configure Firebase for cloud access.
+      </div>
+      <div id="login-alert"></div>
+      <label class="lbl">Username</label>
+      <input class="inp" type="text" id="inp-user" placeholder="Enter your name" autocomplete="username"/>
+      <label class="lbl">Password</label>
+      <input class="inp" type="password" id="inp-pass" placeholder="Enter password" autocomplete="current-password"/>
+      <button class="btn btn-navy btn-full" onclick="doLogin()">Sign In</button>
+
+    </div>
+  </div>
+</div>
+
+<!-- STAFF -->
+<div id="screen-staff" class="screen">
+  <div style="background:var(--navy);padding:12px 20px;display:flex;align-items:center;justify-content:space-between">
+    <div><div style="color:#fff;font-size:15px;font-weight:700" id="staff-greeting-name">Welcome</div><div style="color:#a8b8d8;font-size:11px" id="staff-desig-label"></div></div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="logo-wrap" style="padding:3px 6px"><svg width="52" height="22" viewBox="0 0 200 84" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="84" rx="8" fill="#5b3f9e"/><rect x="10" y="10" width="10" height="64" rx="3" fill="#138808"/><rect x="10" y="10" width="10" height="22" rx="3" fill="#FF9933"/><rect x="10" y="31" width="10" height="22" fill="#ffffff"/><rect x="10" y="52" width="10" height="22" rx="3" fill="#138808"/><text x="28" y="66" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="52" fill="#ffffff">CMA</text><polygon points="158,4 186,4 186,32 158,32" fill="#f7941d"/><polyline points="163,20 172,29 188,10" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <span id="staff-status-badge" class="badge b-warning">Not punched in</span>
+      <button class="btn btn-sm btn-outline" style="color:#fff;border-color:rgba(255,255,255,0.3)" onclick="doLogout()">Sign out</button>
+    </div>
+  </div>
+  <div class="body-wrap">
+    <div class="tab-bar" id="staff-tab-bar">
+      <div class="tab-item active" onclick="staffTab('s-attend',0)">Attendance</div>
+      <div class="tab-item" onclick="staffTab('s-tasks',1)">Log work</div>
+      <div class="tab-item" onclick="staffTab('s-expense',2)">Expenses</div>
+      <div class="tab-item" onclick="staffTab('s-mytasks',3)">My log</div>
+    </div>
+
+    <div id="s-attend">
+      <div class="punch-area">
+        <div class="punch-time" id="live-clock">--:--:--</div>
+        <div class="punch-date" id="live-date"></div>
+        <div class="punch-status" id="punch-status-text">Ready to punch in</div>
+        <div class="punch-btns">
+          <button class="btn-punch-in" id="btn-punchin" onclick="punchIn()">Punch In</button>
+          <button class="btn-punch-out" id="btn-punchout" onclick="punchOut()" disabled>Punch Out</button>
+        </div>
+        <div class="punch-msg" id="punch-msg"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>My attendance this month</div>
+        <div id="my-att-summary" style="font-size:13px;color:var(--text3)">No records yet.</div>
+      </div>
+    </div>
+
+    <div id="s-tasks" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Log work</div>
+        <div id="task-alert"></div>
+        <label class="lbl">Client</label>
+        <select class="inp" id="sel-client"><option value="">-- Select client --</option></select>
+        <div style="display:flex;gap:8px;margin-bottom:14px;margin-top:-10px">
+          <button class="btn btn-sm btn-outline" onclick="openModal('modal-add-client')">+ New client</button>
+          <button class="btn btn-sm btn-outline" onclick="openModal('modal-add-tasktype')">+ New task type</button>
+        </div>
+        <label class="lbl">Task type</label>
+        <select class="inp" id="sel-tasktype"><option value="">-- Select task type --</option></select>
+        <label class="lbl">Description</label>
+        <textarea class="inp" id="inp-desc" placeholder="Brief description of work done..."></textarea>
+        <label class="lbl">Remarks / additional comment for team leader</label>
+        <textarea class="inp" id="inp-task-remarks" placeholder="Any additional remarks, issues, or notes for CMA Hirav..."></textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label class="lbl">Hours spent</label><input class="inp" type="number" id="inp-hours" min="0.5" max="12" step="0.5" placeholder="e.g. 2.5"/></div>
+          <div><label class="lbl">Status</label>
+            <select class="inp" id="sel-status"><option>In Progress</option><option>Completed</option><option>Pending Review</option></select>
+          </div>
+        </div>
+        <button class="btn btn-navy" onclick="logTask()">Save task entry</button>
+      </div>
+    </div>
+
+    <div id="s-expense" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Submit expense claim</div>
+        <div id="exp-alert"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label class="lbl">Category</label>
+            <select class="inp" id="exp-cat">
+              <option value="">-- Select --</option>
+              <option>Travel / Conveyance</option><option>Courier / Postage</option>
+              <option>Client Entertainment</option><option>Office Supplies</option>
+              <option>Printing / Stationery</option><option>Government Fees / Challan</option><option>Other</option>
+            </select>
+          </div>
+          <div><label class="lbl">Amount (₹)</label><input class="inp" type="number" id="exp-amt" placeholder="e.g. 500" min="1"/></div>
+        </div>
+        <label class="lbl">Remarks / details</label>
+        <textarea class="inp" id="exp-remarks" placeholder="e.g. Auto fare to GST office for ABC Pvt Ltd ASMT-10 hearing"></textarea>
+        <label class="lbl">Upload supporting document (photo / PDF)</label>
+        <input class="inp" type="file" id="exp-file" accept="image/*,application/pdf" style="padding:6px"/>
+        <div id="exp-file-preview" style="margin-bottom:12px"></div>
+        <button class="btn btn-navy" onclick="submitExpense()">Submit for approval</button>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>My claims</div>
+        <div id="my-exp-list"><div style="font-size:13px;color:var(--text3)">No claims yet.</div></div>
+      </div>
+    </div>
+
+    <div id="s-mytasks" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>My tasks today</div>
+        <div id="my-tasks-list"><div style="font-size:13px;color:var(--text3)">No tasks today.</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN -->
+<div id="screen-admin" class="screen">
+  <div style="background:var(--navy);padding:13px 20px;display:flex;align-items:center;justify-content:space-between">
+    <div><div style="color:#fff;font-size:16px;font-weight:700">H H Shah &amp; Co. — Admin</div><div style="color:#a8b8d8;font-size:11px;margin-top:2px">CMA Hirav H. Shah | Cost Accountants, Vadodara</div></div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div class="logo-wrap"><svg width="80" height="34" viewBox="0 0 200 84" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="84" rx="8" fill="#5b3f9e"/><rect x="10" y="10" width="10" height="64" rx="3" fill="#138808"/><rect x="10" y="10" width="10" height="22" rx="3" fill="#FF9933"/><rect x="10" y="31" width="10" height="22" fill="#ffffff"/><rect x="10" y="52" width="10" height="22" rx="3" fill="#138808"/><text x="28" y="66" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="52" fill="#ffffff">CMA</text><polygon points="158,4 186,4 186,32 158,32" fill="#f7941d"/><polyline points="163,20 172,29 188,10" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <button class="btn btn-sm btn-outline" style="color:#fff;border-color:rgba(255,255,255,0.3)" onclick="doLogout()">Sign out</button>
+    </div>
+  </div>
+  <div class="body-wrap">
+    <div class="cloud-banner">
+      <span class="online-dot"></span>
+      <span id="cloud-status-text">Connected — real-time data sync active</span>
+      <span style="margin-left:auto;opacity:0.7;font-size:11px" id="last-sync-time"></span>
+    </div>
+    <div class="admin-sidebar">
+      <div class="side-btn active" onclick="showTab('tab-overview',0)">Overview</div>
+      <div class="side-btn" onclick="showTab('tab-attendance',1)">Attendance</div>
+      <div class="side-btn" onclick="showTab('tab-tasks',2)">Tasks</div>
+      <div class="side-btn" onclick="showTab('tab-payroll',3)">Payroll</div>
+      <div class="side-btn" onclick="showTab('tab-expenses',4)">Expenses</div>
+      <div class="side-btn" onclick="showTab('tab-billing',5)">Billing</div>
+      <div class="side-btn" onclick="showTab('tab-users',6)">Users</div>
+    </div>
+
+    <div id="tab-overview">
+      <div class="metric-grid" id="admin-metrics"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="card"><div class="card-title"><span class="card-title-bar"></span>Today's attendance</div><div id="attendance-snapshot"></div></div>
+        <div class="card"><div class="card-title"><span class="card-title-bar"></span>Pending expense claims</div><div id="pending-exp-snapshot"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Recent task activity</div>
+        <div class="tbl-wrap" id="recent-tasks"></div>
+      </div>
+    </div>
+
+    <div id="tab-attendance" style="display:none">
+      <div class="card">
+        <div class="filter-row">
+          <div class="filter-item"><label class="lbl">Date</label><input class="inp" type="date" id="att-date-filter" style="margin:0"/></div>
+          <div class="filter-item"><label class="lbl">Staff</label><select class="inp" id="att-staff-filter" style="margin:0"><option value="">All staff</option></select></div>
+          <button class="btn btn-navy btn-sm" onclick="filterAttendance()">Apply</button>
+          <button class="btn btn-sm btn-outline" onclick="exportCSV('attendance')">Export CSV</button>
+        </div>
+        <div class="tbl-wrap" id="att-table"></div>
+      </div>
+    </div>
+
+    <div id="tab-tasks" style="display:none">
+      <div class="card">
+        <div class="filter-row">
+          <div class="filter-item"><label class="lbl">Staff</label><select class="inp" id="task-staff-filter" style="margin:0"><option value="">All</option></select></div>
+          <div class="filter-item"><label class="lbl">Client</label><select class="inp" id="task-client-filter" style="margin:0"><option value="">All</option></select></div>
+          <div class="filter-item"><label class="lbl">Type</label>
+            <select class="inp" id="task-type-filter" style="margin:0"><option value="">All</option></select>
+          </div>
+          <div class="filter-item"><label class="lbl">Status</label>
+            <select class="inp" id="task-status-filter" style="margin:0"><option value="">All</option><option>Completed</option><option>In Progress</option><option>Pending Review</option></select>
+          </div>
+          <button class="btn btn-navy btn-sm" onclick="filterTasks()">Apply</button>
+          <button class="btn btn-sm btn-outline" onclick="exportCSV('tasks')">Export CSV</button>
+        </div>
+        <div class="tbl-wrap" id="task-table"></div>
+      </div>
+    </div>
+
+    <div id="tab-payroll" style="display:none">
+      <div class="card">
+        <div class="filter-row">
+          <div class="filter-item"><label class="lbl">Month</label><input class="inp" type="month" id="payroll-month" style="margin:0"/></div>
+          <div class="filter-item"><label class="lbl">Working days</label><input class="inp" type="number" id="working-days" min="1" max="31" value="26" style="margin:0"/></div>
+          <button class="btn btn-navy btn-sm" onclick="computePayroll()">Compute payroll</button>
+          <button class="btn btn-sm btn-outline" onclick="exportCSV('payroll')">Export CSV</button>
+        </div>
+        <div class="tbl-wrap" id="payroll-table"><div style="font-size:13px;color:var(--text3);padding:10px">Select month and click Compute payroll.</div></div>
+      </div>
+    </div>
+
+    <div id="tab-expenses" style="display:none">
+      <div class="card">
+        <div class="filter-row">
+          <div class="filter-item"><label class="lbl">Staff</label><select class="inp" id="exp-staff-filter" style="margin:0"><option value="">All staff</option></select></div>
+          <div class="filter-item"><label class="lbl">Status</label>
+            <select class="inp" id="exp-status-filter" style="margin:0"><option value="">All</option><option>Pending</option><option>Approved</option><option>Rejected</option></select>
+          </div>
+          <button class="btn btn-navy btn-sm" onclick="filterExpenses()">Apply</button>
+          <button class="btn btn-sm btn-outline" onclick="exportCSV('expenses')">Export CSV</button>
+        </div>
+        <div class="tbl-wrap" id="exp-table"></div>
+      </div>
+    </div>
+
+    <div id="tab-billing" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Client-wise billing</div>
+        <div class="filter-row">
+          <div class="filter-item"><label class="lbl">Client</label><select class="inp" id="bill-client" style="margin:0"><option value="">All clients</option></select></div>
+          <div class="filter-item"><label class="lbl">Month</label><input class="inp" type="month" id="bill-month" style="margin:0"/></div>
+          <button class="btn btn-navy btn-sm" onclick="renderBilling()">Apply</button>
+          <button class="btn btn-sm btn-outline" onclick="exportCSV('billing')">Export CSV</button>
+        </div>
+        <div id="billing-area"></div>
+      </div>
+    </div>
+
+    <div id="tab-users" style="display:none">
+      <div class="card" id="cloud-setup-card">
+        <div class="card-title"><span class="card-title-bar"></span>Cloud setup</div>
+        <div class="alert alert-info" style="font-size:12px">
+          <b>First time setup:</b> After pasting your Firebase config in the HTML file, click <b>Push data to cloud</b> once to upload all users, clients and task types to Firestore. After that, all devices will sync automatically.
+        </div>
+        <button class="btn btn-navy" onclick="pushInitialData();showAlert('user-alert','Data pushed to Firebase cloud!','success')">Push data to cloud (first-time setup)</button>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Add team member</div>
+        <div id="user-alert"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label class="lbl">Full name (username)</label><input class="inp" type="text" id="new-username" placeholder="e.g. Rahul Shah"/></div>
+          <div><label class="lbl">Password</label><input class="inp" type="password" id="new-password" placeholder="Set password"/></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div><label class="lbl">Role</label><select class="inp" id="new-role"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+          <div><label class="lbl">Designation</label><input class="inp" type="text" id="new-desig" placeholder="e.g. Article Assistant"/></div>
+          <div><label class="lbl">Monthly salary (₹)</label><input class="inp" type="number" id="new-salary" placeholder="e.g. 12000" min="0"/></div>
+        </div>
+        <button class="btn btn-navy" onclick="addUser()">Add team member</button>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Team members</div>
+        <div class="tbl-wrap" id="users-table"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Manage clients</div>
+        <div class="tbl-wrap" id="clients-table"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-title-bar"></span>Manage task types</div>
+        <div id="tasktypes-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Add Client -->
+<div id="modal-add-client" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-title">Add new client <span class="modal-close" onclick="closeModal('modal-add-client')">&#215;</span></div>
+    <div id="client-modal-alert"></div>
+    <label class="lbl">Client / firm name</label>
+    <input class="inp" type="text" id="new-client-name" placeholder="e.g. Mehta Industries Pvt Ltd"/>
+    <label class="lbl">Contact person</label>
+    <input class="inp" type="text" id="new-client-contact" placeholder="e.g. Mr. Rajesh Mehta"/>
+    <label class="lbl">Mobile number</label>
+    <input class="inp" type="tel" id="new-client-mobile" placeholder="e.g. 9876543210"/>
+    <label class="lbl">Service type</label>
+    <select class="inp" id="new-client-service">
+      <option value="">-- Select --</option>
+      <option>GST Compliance</option><option>Cost Audit</option><option>Income Tax</option>
+      <option>GST + Income Tax</option><option>All Services</option><option>Other</option>
+    </select>
+    <button class="btn btn-navy btn-full" onclick="addClient()">Add client</button>
+  </div>
+</div>
+
+<!-- MODAL: Add Task Type -->
+<div id="modal-add-tasktype" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-title">Add new task type <span class="modal-close" onclick="closeModal('modal-add-tasktype')">&#215;</span></div>
+    <label class="lbl">Task type name</label>
+    <input class="inp" type="text" id="new-tasktype-name" placeholder="e.g. ROC Compliance"/>
+    <button class="btn btn-navy btn-full" onclick="addTaskType()">Add task type</button>
+  </div>
+</div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox-wrap" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:2000;align-items:center;justify-content:center" onclick="this.style.display='none'">
+  <img id="lightbox-img" style="max-width:92%;max-height:90%;border-radius:8px"/>
+</div>
+
+<script>
+// ============================================================
+// FIREBASE CONFIG — Replace with your actual Firebase project config
+// Get this from Firebase Console > Project Settings > Your apps
+// ============================================================
+const FIREBASE_CONFIG = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+// ============================================================
+// LOCAL FALLBACK DATABASE (works without Firebase)
+// ============================================================
+var DB = {
+  users:[
+    {id:1,name:"admin",password:"admin123",role:"admin",desig:"Managing Partner",salary:0},
+  ],
+  clients:[
+    {id:"c1",name:"ABC Pvt Ltd",contact:"Mr. Anil Bhatt",mobile:"9825012345",service:"GST Compliance"},
+    {id:"c2",name:"XYZ Industries",contact:"Mr. Yash Patel",mobile:"9727098765",service:"Cost Audit"},
+    {id:"c3",name:"Sunrise Exports",contact:"Mr. Suresh Rao",mobile:"9898765432",service:"All Services"},
+    {id:"c4",name:"Mehta Brothers",contact:"Mr. Vinod Mehta",mobile:"9712345678",service:"GST + Income Tax"},
+    {id:"c5",name:"Global Logistics",contact:"Ms. Pooja Shah",mobile:"9824567890",service:"Income Tax"},
+    {id:"c6",name:"Dev Constructions",contact:"Mr. Devang Patel",mobile:"9099887766",service:"GST Compliance"},
+  ],
+  taskTypes:["GST Returns & Compliance","Cost Audit Work","Income Tax / TDS","Client Advisory / Meeting","Internal Office Task","ROC Compliance","Other"],
+  attendance:[],tasks:[],expenses:[],bills:[],
+  nextId:500
+};
+
+
+
+var currentUser = null, clockInterval = null, lastPayrollData = [];
+
+// ============================================================
+// LOCAL STORAGE PERSISTENCE
+// ============================================================
+function saveDB(){
+  try{
+    localStorage.setItem('hhshah_users', JSON.stringify(DB.users));
+    localStorage.setItem('hhshah_clients', JSON.stringify(DB.clients));
+    localStorage.setItem('hhshah_taskTypes', JSON.stringify(DB.taskTypes));
+    localStorage.setItem('hhshah_attendance', JSON.stringify(DB.attendance));
+    localStorage.setItem('hhshah_tasks', JSON.stringify(DB.tasks));
+    localStorage.setItem('hhshah_expenses', JSON.stringify(DB.expenses));
+    localStorage.setItem('hhshah_bills', JSON.stringify(DB.bills));
+    localStorage.setItem('hhshah_nextId', JSON.stringify(DB.nextId));
+  }catch(e){console.warn('Storage save failed:',e)}
+}
+
+function loadDB(){
+  try{
+    var u=localStorage.getItem('hhshah_users');
+    var c=localStorage.getItem('hhshah_clients');
+    var tt=localStorage.getItem('hhshah_taskTypes');
+    var att=localStorage.getItem('hhshah_attendance');
+    var tasks=localStorage.getItem('hhshah_tasks');
+    var exp=localStorage.getItem('hhshah_expenses');
+    var bills=localStorage.getItem('hhshah_bills');
+    var nid=localStorage.getItem('hhshah_nextId');
+    if(u)DB.users=JSON.parse(u);
+    if(c)DB.clients=JSON.parse(c);
+    if(tt)DB.taskTypes=JSON.parse(tt);
+    if(att)DB.attendance=JSON.parse(att);
+    if(tasks)DB.tasks=JSON.parse(tasks);
+    if(exp)DB.expenses=JSON.parse(exp);
+    if(bills)DB.bills=JSON.parse(bills);
+    if(nid)DB.nextId=JSON.parse(nid);
+    console.log('DB loaded from localStorage. Users:', DB.users.length);
+  }catch(e){console.warn('Storage load failed:',e)}
+}
+
+// Firebase startup handled below after all functions are defined
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function now(){return new Date()}
+function fmtTime(d){return d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+function fmtDate(d){return d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+function fmtDateShort(s){var d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+function todayStr(){var d=now();return d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0')+'-'+d.getDate().toString().padStart(2,'0')}
+function monthStr(){var d=now();return d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0')}
+function inr(n){return '\u20B9'+Number(n).toLocaleString('en-IN')}
+function initials(name){return name.split(' ').map(function(w){return w[0]}).join('').substring(0,2).toUpperCase()}
+function showAlert(id,msg,type){var el=document.getElementById(id);if(!el)return;el.innerHTML='<div class="alert alert-'+type+'">'+msg+'</div>';setTimeout(function(){el.innerHTML=''},4000)}
+function openModal(id){document.getElementById(id).classList.add('open')}
+function closeModal(id){document.getElementById(id).classList.remove('open')}
+function openLightbox(src){var lb=document.getElementById('lightbox-wrap'),img=document.getElementById('lightbox-img');img.src=src;lb.style.display='flex'}
+
+// Last sync time
+setInterval(function(){var el=document.getElementById('last-sync-time');if(el)el.textContent='Last sync: '+fmtTime(now())},5000);
+
+// ============================================================
+// AUTH
+// ============================================================
+function doLogin(){
+  var u=document.getElementById('inp-user').value.trim(),p=document.getElementById('inp-pass').value.trim();
+  if(!u||!p){showAlert('login-alert','Please enter username and password','danger');return}
+  var btn=document.querySelector('#screen-login .btn-navy');
+  if(btn){btn.textContent='Signing in...';btn.disabled=true;}
+
+  function _tryLogin(usersList){
+    var user=usersList.find(function(x){return x.name.toLowerCase()===u.toLowerCase()&&x.password===p});
+    if(btn){btn.textContent='Sign In';btn.disabled=false;}
+    if(!user){showAlert('login-alert','Invalid username or password. If you are new, ask admin to add your account.','danger');return}
+    currentUser=user;
+    if(user.role==='admin'){showScreen('admin');renderAdmin()}else{showScreen('staff');initStaffView()}
+  }
+
+  if(firebaseReady && db){
+    // Fetch fresh from Firestore — works across ALL devices
+    db.collection('users').get().then(function(snap){
+      var rows=[];
+      snap.forEach(function(d){rows.push(d.data())});
+      if(rows.length) DB.users=rows;
+      _tryLogin(DB.users);
+    }).catch(function(e){
+      console.warn('Firestore login fetch failed, using local:',e);
+      _tryLogin(DB.users);
+    });
+  } else {
+    // No Firebase — local only
+    _tryLogin(DB.users);
+  }
+}
+function doLogout(){currentUser=null;if(clockInterval)clearInterval(clockInterval);showScreen('login');document.getElementById('inp-user').value='';document.getElementById('inp-pass').value=''}
+function showScreen(n){document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active')});document.getElementById('screen-'+n).classList.add('active')}
+
+// ============================================================
+// STAFF
+// ============================================================
+function staffTab(id,idx){
+  ['s-attend','s-tasks','s-expense','s-mytasks'].forEach(function(t){document.getElementById(t).style.display=t===id?'block':'none'});
+  document.querySelectorAll('#staff-tab-bar .tab-item').forEach(function(t,i){t.classList.toggle('active',i===idx)});
+  if(id==='s-mytasks')renderMyTasks();
+  if(id==='s-expense')renderMyExpenses();
+  if(id==='s-attend')renderMyAttSummary();
+  if(id==='s-tasks')populateTaskDropdowns();
+}
+
+function initStaffView(){
+  document.getElementById('staff-greeting-name').textContent='Welcome, '+currentUser.name;
+  document.getElementById('staff-desig-label').textContent=currentUser.desig||'Team member';
+  if(clockInterval)clearInterval(clockInterval);
+  clockInterval=setInterval(function(){document.getElementById('live-clock').textContent=fmtTime(now());document.getElementById('live-date').textContent=fmtDate(now())},1000);
+  document.getElementById('live-clock').textContent=fmtTime(now());
+  document.getElementById('live-date').textContent=fmtDate(now());
+  populateTaskDropdowns();
+  updatePunchUI(getTodayAtt(currentUser.id));
+  renderMyAttSummary();
+}
+
+function getTodayAtt(uid){return DB.attendance.find(function(a){return a.userId===uid&&a.date===todayStr()})}
+
+function updatePunchUI(att){
+  var badge=document.getElementById('staff-status-badge'),msg=document.getElementById('punch-msg'),stat=document.getElementById('punch-status-text'),btnIn=document.getElementById('btn-punchin'),btnOut=document.getElementById('btn-punchout');
+  if(!att){badge.textContent='Not punched in';badge.className='badge b-warning';btnIn.disabled=false;btnOut.disabled=true;stat.textContent='Ready to punch in';msg.textContent='';return}
+  if(att.punchIn&&!att.punchOut){badge.textContent='In office';badge.className='badge b-success';btnIn.disabled=true;btnOut.disabled=false;stat.textContent='Punched in at '+att.punchIn;msg.textContent='Have a productive day!'}
+  if(att.punchOut){badge.textContent='Day complete';badge.className='badge b-info';btnIn.disabled=true;btnOut.disabled=true;stat.textContent='Day complete';msg.textContent='In: '+att.punchIn+' \u2192 Out: '+att.punchOut+' | '+att.hoursWorked+'h'}
+}
+
+function punchIn(){if(getTodayAtt(currentUser.id))return;var _att={id:DB.nextId++,userId:currentUser.id,userName:currentUser.name,date:todayStr(),punchIn:fmtTime(now()),punchOut:null,hoursWorked:null};
+  DB.attendance.push(_att);saveDB();cloudSave('attendance',_att);bumpCounter();updatePunchUI(getTodayAtt(currentUser.id));renderMyAttSummary()}
+function punchOut(){var att=getTodayAtt(currentUser.id);if(!att||att.punchOut)return;var t=fmtTime(now());att.punchOut=t;var ip=att.punchIn.split(':'),op=t.split(':');att.hoursWorked=((parseInt(op[0])*60+parseInt(op[1])-(parseInt(ip[0])*60+parseInt(ip[1])))/60).toFixed(2);
+  saveDB();cloudUpdate('attendance',att.id,{punchOut:att.punchOut,hoursWorked:att.hoursWorked});updatePunchUI(att);renderMyAttSummary()}
+
+function renderMyAttSummary(){
+  var el=document.getElementById('my-att-summary');if(!el)return;
+  var mine=DB.attendance.filter(function(a){return a.userId===currentUser.id&&a.date.startsWith(monthStr())});
+  if(!mine.length){el.innerHTML='<div style="font-size:13px;color:var(--text3)">No records this month yet.</div>';return}
+  var present=mine.filter(function(a){return a.punchIn}).length;
+  var hrs=mine.reduce(function(s,a){return s+(parseFloat(a.hoursWorked)||0)},0);
+  el.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px"><div class="metric"><div class="metric-val">'+present+'</div><div class="metric-lbl">Days present</div></div><div class="metric success"><div class="metric-val">'+hrs.toFixed(1)+'h</div><div class="metric-lbl">Hours logged</div></div><div class="metric accent"><div class="metric-val">'+(present>0?(hrs/present).toFixed(1):0)+'h</div><div class="metric-lbl">Avg / day</div></div></div>';
+}
+
+function populateTaskDropdowns(){
+  var cs=document.getElementById('sel-client');if(cs){var cv=cs.value;cs.innerHTML='<option value="">-- Select client --</option>';DB.clients.forEach(function(c){var o=document.createElement('option');o.value=c.name;o.textContent=c.name;cs.appendChild(o)});if(cv)cs.value=cv}
+  var ts=document.getElementById('sel-tasktype');if(ts){var tv=ts.value;ts.innerHTML='<option value="">-- Select task type --</option>';DB.taskTypes.forEach(function(t){var o=document.createElement('option');o.value=t;o.textContent=t;ts.appendChild(o)});if(tv)ts.value=tv}
+}
+
+function logTask(){
+  var client=document.getElementById('sel-client').value;
+  var type=document.getElementById('sel-tasktype').value;
+  var desc=document.getElementById('inp-desc').value.trim();
+  var remarks=document.getElementById('inp-task-remarks').value.trim();
+  var hrs=parseFloat(document.getElementById('inp-hours').value);
+  var status=document.getElementById('sel-status').value;
+  if(!client||!type||!desc||!hrs){showAlert('task-alert','Please fill all required fields','danger');return}
+  var _task={id:DB.nextId++,userId:currentUser.id,userName:currentUser.name,date:todayStr(),client:client,taskType:type,description:desc,remarks:remarks,hours:hrs,status:status,timestamp:fmtTime(now())};
+  DB.tasks.push(_task);saveDB();cloudSave('tasks',_task);bumpCounter();
+  showAlert('task-alert','Task saved successfully!','success');
+  document.getElementById('sel-tasktype').value='';document.getElementById('inp-desc').value='';document.getElementById('inp-task-remarks').value='';document.getElementById('inp-hours').value='';document.getElementById('sel-client').value='';
+}
+
+function addClient(){
+  var name=document.getElementById('new-client-name').value.trim();
+  var contact=document.getElementById('new-client-contact').value.trim();
+  var mobile=document.getElementById('new-client-mobile').value.trim();
+  var service=document.getElementById('new-client-service').value;
+  if(!name){showAlert('client-modal-alert','Client name is required','danger');return}
+  if(DB.clients.find(function(c){return c.name.toLowerCase()===name.toLowerCase()})){showAlert('client-modal-alert','Client already exists','danger');return}
+  var _cl={id:'c'+DB.nextId++,name:name,contact:contact,mobile:mobile,service:service};
+  DB.clients.push(_cl);saveDB();cloudSave('clients',_cl);bumpCounter();populateTaskDropdowns();populateAdminFilters();
+  document.getElementById('new-client-name').value='';document.getElementById('new-client-contact').value='';document.getElementById('new-client-mobile').value='';document.getElementById('new-client-service').value='';
+  closeModal('modal-add-client');
+  showAlert('task-alert','Client "'+name+'" added!','success');
+}
+
+function addTaskType(){
+  var name=document.getElementById('new-tasktype-name').value.trim();
+  if(!name)return;
+  if(!DB.taskTypes.includes(name)){
+    var _ttid='tt'+(DB.nextId++);
+    DB.taskTypes.push(name);
+    saveDB();cloudSave('taskTypes',{id:_ttid,name:name});bumpCounter();
+  }populateTaskDropdowns();populateAdminFilters();
+  document.getElementById('new-tasktype-name').value='';
+  closeModal('modal-add-tasktype');
+  showAlert('task-alert','Task type added!','success');
+}
+
+function submitExpense(){
+  var cat=document.getElementById('exp-cat').value,amt=parseFloat(document.getElementById('exp-amt').value),rem=document.getElementById('exp-remarks').value.trim(),fileInp=document.getElementById('exp-file');
+  if(!cat||!amt||!rem){showAlert('exp-alert','Please fill category, amount and remarks','danger');return}
+  var file=fileInp.files[0];
+  var exp={id:DB.nextId++,userId:currentUser.id,userName:currentUser.name,date:todayStr(),month:monthStr(),category:cat,amount:amt,remarks:rem,status:'Pending',fileName:file?file.name:'',fileData:null};
+  if(file){var r=new FileReader();r.onload=function(e){exp.fileData=e.target.result;DB.expenses.push(exp);_fe()};r.readAsDataURL(file)}else{DB.expenses.push(exp);_fe()}
+  function _fe(){saveDB();cloudSave('expenses',exp);bumpCounter();showAlert('exp-alert','Submitted for approval!','success');document.getElementById('exp-cat').value='';document.getElementById('exp-amt').value='';document.getElementById('exp-remarks').value='';fileInp.value='';document.getElementById('exp-file-preview').innerHTML='';renderMyExpenses()}
+}
+
+document.getElementById('exp-file').addEventListener('change',function(){
+  var f=this.files[0],prev=document.getElementById('exp-file-preview');
+  if(!f){prev.innerHTML='';return}
+  if(f.type.startsWith('image/')){var r=new FileReader();r.onload=function(e){prev.innerHTML='<img src="'+e.target.result+'" class="file-thumb" onclick="openLightbox(\''+e.target.result+'\')"/> <span style="font-size:12px;color:var(--text2);margin-left:6px">'+f.name+'</span>'};r.readAsDataURL(f)}
+  else prev.innerHTML='<span class="file-doc">PDF: '+f.name+'</span>';
+});
+
+function renderMyExpenses(){
+  var el=document.getElementById('my-exp-list'),mine=DB.expenses.filter(function(e){return e.userId===currentUser.id});
+  if(!mine.length){el.innerHTML='<div style="font-size:13px;color:var(--text3)">No claims yet.</div>';return}
+  var h='';
+  mine.slice().reverse().forEach(function(e){
+    var sc=e.status==='Approved'?'b-success':e.status==='Rejected'?'b-danger':'b-warning';
+    h+='<div class="exp-card"><div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-weight:700;font-size:13px;color:var(--navy)">'+e.category+'</span><span style="font-weight:700;color:var(--navy)">'+inr(e.amount)+'</span></div>';
+    h+='<div style="color:var(--text2);font-size:12px;margin-bottom:6px">'+e.remarks+'</div>';
+    h+='<div style="display:flex;align-items:center;gap:8px"><span class="badge '+sc+'">'+e.status+'</span><span style="font-size:11px;color:var(--text3)">'+fmtDateShort(e.date)+'</span>';
+    if(e.fileData&&e.fileData.startsWith('data:image'))h+='<img src="'+e.fileData+'" class="file-thumb" onclick="openLightbox(\''+e.fileData+'\')" style="width:28px;height:28px"/>';
+    else if(e.fileName)h+='<span class="file-doc">'+e.fileName+'</span>';
+    h+='</div></div>';
+  });
+  el.innerHTML=h;
+}
+
+function renderMyTasks(){
+  var el=document.getElementById('my-tasks-list'),mine=DB.tasks.filter(function(t){return t.userId===currentUser.id&&t.date===todayStr()});
+  if(!mine.length){el.innerHTML='<div style="font-size:13px;color:var(--text3)">No tasks today.</div>';return}
+  var h='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th>Type</th><th>Description</th><th>Remarks</th><th>Hours</th><th>Status</th></tr></thead><tbody>';
+  mine.forEach(function(t){var sc=t.status==='Completed'?'b-success':t.status==='In Progress'?'b-warning':'b-info';h+='<tr><td>'+t.client+'</td><td style="font-size:11px">'+t.taskType+'</td><td style="font-size:12px;max-width:130px">'+t.description+'</td><td style="font-size:11px;color:var(--text2);max-width:130px">'+(t.remarks||'—')+'</td><td><b>'+t.hours+'h</b></td><td><span class="badge '+sc+'">'+t.status+'</span></td></tr>'});
+  el.innerHTML=h+'</tbody></table></div>';
+}
+
+// ============================================================
+// ADMIN
+// ============================================================
+function showTab(id,idx){
+  var tabs=['tab-overview','tab-attendance','tab-tasks','tab-payroll','tab-expenses','tab-billing','tab-users'];
+  tabs.forEach(function(t){document.getElementById(t).style.display=t===id?'block':'none'});
+  document.querySelectorAll('.side-btn').forEach(function(b,i){b.classList.toggle('active',i===idx)});
+  if(id==='tab-attendance')renderAttendanceTable(DB.attendance);
+  if(id==='tab-tasks'){populateAdminTaskTypeFilter();renderTaskTable(DB.tasks)}
+  if(id==='tab-expenses')renderExpenseTable(DB.expenses);
+  if(id==='tab-billing'){document.getElementById('bill-month').value=monthStr();renderBilling()}
+  if(id==='tab-users'){renderUsersTable();renderClientsTable();renderTaskTypesList()}
+  if(id==='tab-payroll')document.getElementById('payroll-month').value=monthStr();
+}
+
+function renderAdmin(){
+  var todayAtt=DB.attendance.filter(function(a){return a.date===todayStr()}),inToday=todayAtt.filter(function(a){return a.punchIn}).length;
+  var todayHrs=DB.tasks.filter(function(t){return t.date===todayStr()}).reduce(function(s,t){return s+t.hours},0);
+  var pendExp=DB.expenses.filter(function(e){return e.status==='Pending'}).length;
+  var staffCount=DB.users.filter(function(u){return u.role==='staff'}).length;
+  document.getElementById('admin-metrics').innerHTML=
+    '<div class="metric"><div class="metric-val">'+staffCount+'</div><div class="metric-lbl">Total staff</div></div>'+
+    '<div class="metric success"><div class="metric-val">'+inToday+'</div><div class="metric-lbl">Present today</div></div>'+
+    '<div class="metric accent"><div class="metric-val">'+pendExp+'</div><div class="metric-lbl">Pending claims</div></div>'+
+    '<div class="metric gold"><div class="metric-val">'+todayHrs.toFixed(1)+'h</div><div class="metric-lbl">Hours today</div></div>';
+
+  // Attendance snapshot
+  var snap='';
+  if(!todayAtt.length)snap='<div style="font-size:13px;color:var(--text3)">No records yet.</div>';
+  else todayAtt.forEach(function(a){var st=a.punchOut?'<span class="badge b-success">Done</span>':'<span class="badge b-warning">In office</span>';snap+='<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)"><div class="avatar">'+initials(a.userName)+'</div><div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--navy)">'+a.userName+'</div><div style="font-size:11px;color:var(--text3)">In: '+a.punchIn+(a.punchOut?' | Out: '+a.punchOut:'')+'</div></div>'+st+'</div>'});
+  document.getElementById('attendance-snapshot').innerHTML=snap;
+
+  // Pending expenses
+  var pend=DB.expenses.filter(function(e){return e.status==='Pending'}),ps='';
+  if(!pend.length)ps='<div style="font-size:13px;color:var(--text3)">No pending claims.</div>';
+  else pend.forEach(function(e){ps+='<div style="padding:8px 0;border-bottom:1px solid var(--border)"><div style="display:flex;justify-content:space-between"><span style="font-size:13px;font-weight:600;color:var(--navy)">'+e.userName+'</span><span style="font-weight:700">'+inr(e.amount)+'</span></div><div style="font-size:11px;color:var(--text3);margin:2px 0">'+e.category+' — '+e.remarks.substring(0,35)+'</div><div style="display:flex;gap:6px;margin-top:5px"><button class="btn btn-sm btn-success" onclick="approveExp('+e.id+',\'Approved\')">Approve</button><button class="btn btn-sm btn-danger-soft" onclick="approveExp('+e.id+',\'Rejected\')">Reject</button></div></div>'});
+  document.getElementById('pending-exp-snapshot').innerHTML=ps;
+
+  // Recent tasks WITH remarks column
+  var recent=DB.tasks.slice(-8).reverse(),rt='';
+  if(!recent.length)rt='<div style="font-size:13px;color:var(--text3)">No tasks yet.</div>';
+  else{
+    rt='<table class="tbl"><thead><tr><th>Staff</th><th>Client</th><th>Type</th><th>Description</th><th>Remarks for leader</th><th>Hours</th><th>Status</th></tr></thead><tbody>';
+    recent.forEach(function(t){
+      var sc=t.status==='Completed'?'b-success':t.status==='In Progress'?'b-warning':'b-info';
+      var rmk=t.remarks?'<span style="color:var(--accent);font-size:11px">'+t.remarks+'</span>':'<span style="color:var(--text3);font-size:11px">—</span>';
+      rt+='<tr><td><div style="display:flex;align-items:center;gap:6px"><div class="avatar" style="width:26px;height:26px;font-size:10px">'+initials(t.userName)+'</div>'+t.userName+'</div></td><td>'+t.client+'</td><td style="font-size:11px">'+t.taskType+'</td><td style="max-width:120px;font-size:12px">'+t.description+'</td><td style="max-width:140px">'+rmk+'</td><td><b>'+t.hours+'h</b></td><td><span class="badge '+sc+'">'+t.status+'</span></td></tr>';
+    });
+    rt+='</tbody></table>';
+  }
+  document.getElementById('recent-tasks').innerHTML=rt;
+  populateAdminFilters();
+}
+
+function approveExp(id,status){var e=DB.expenses.find(function(x){return x.id===id});if(e){e.status=status;saveDB();cloudUpdate('expenses',id,{status:status});}renderAdmin()}
+
+function populateAdminFilters(){
+  var staffs=DB.users.filter(function(u){return u.role==='staff'});
+  ['att-staff-filter','task-staff-filter','bill-staff','exp-staff-filter'].forEach(function(id){var s=document.getElementById(id);if(!s)return;s.innerHTML='<option value="">All staff</option>';staffs.forEach(function(u){s.innerHTML+='<option>'+u.name+'</option>'})});
+  ['task-client-filter','bill-client'].forEach(function(id){var s=document.getElementById(id);if(!s)return;s.innerHTML='<option value="">All clients</option>';DB.clients.forEach(function(c){s.innerHTML+='<option>'+c.name+'</option>'})});
+}
+
+function populateAdminTaskTypeFilter(){
+  var s=document.getElementById('task-type-filter');if(!s)return;
+  s.innerHTML='<option value="">All</option>';
+  DB.taskTypes.forEach(function(t){s.innerHTML+='<option>'+t+'</option>'});
+}
+
+function filterAttendance(){var df=document.getElementById('att-date-filter').value,sf=document.getElementById('att-staff-filter').value;renderAttendanceTable(DB.attendance.filter(function(a){return(!df||a.date===df)&&(!sf||a.userName===sf)}))}
+function renderAttendanceTable(data){
+  var el=document.getElementById('att-table');
+  if(!data.length){el.innerHTML='<div style="font-size:13px;color:var(--text3);padding:10px">No records found.</div>';return}
+  var h='<table class="tbl"><thead><tr><th>Date</th><th>Staff</th><th>Punch in</th><th>Punch out</th><th>Hours</th><th>Status</th></tr></thead><tbody>';
+  data.forEach(function(a){var st=a.punchOut?'<span class="badge b-success">Complete</span>':'<span class="badge b-warning">In office</span>';h+='<tr><td>'+fmtDateShort(a.date)+'</td><td><div style="display:flex;align-items:center;gap:7px"><div class="avatar" style="width:26px;height:26px;font-size:10px">'+initials(a.userName)+'</div>'+a.userName+'</div></td><td>'+a.punchIn+'</td><td>'+(a.punchOut||'—')+'</td><td>'+(a.hoursWorked?a.hoursWorked+'h':'—')+'</td><td>'+st+'</td></tr>'});
+  el.innerHTML=h+'</tbody></table>';
+}
+
+function filterTasks(){
+  var sf=document.getElementById('task-staff-filter').value,cf=document.getElementById('task-client-filter').value,tf=document.getElementById('task-type-filter').value,stf=document.getElementById('task-status-filter').value;
+  renderTaskTable(DB.tasks.filter(function(t){return(!sf||t.userName===sf)&&(!cf||t.client===cf)&&(!tf||t.taskType===tf)&&(!stf||t.status===stf)}));
+}
+function renderTaskTable(data){
+  var el=document.getElementById('task-table');
+  if(!data.length){el.innerHTML='<div style="font-size:13px;color:var(--text3);padding:10px">No records found.</div>';return}
+  var h='<table class="tbl"><thead><tr><th>Date</th><th>Staff</th><th>Client</th><th>Type</th><th>Description</th><th>Remarks</th><th>Hours</th><th>Status</th></tr></thead><tbody>';
+  data.forEach(function(t){var sc=t.status==='Completed'?'b-success':t.status==='In Progress'?'b-warning':'b-info';var rmk=t.remarks?'<span style="color:var(--accent);font-size:11px">'+t.remarks+'</span>':'—';h+='<tr><td>'+fmtDateShort(t.date)+'</td><td>'+t.userName+'</td><td>'+t.client+'</td><td style="font-size:11px">'+t.taskType+'</td><td style="max-width:120px;font-size:12px">'+t.description+'</td><td style="max-width:130px">'+rmk+'</td><td><b>'+t.hours+'h</b></td><td><span class="badge '+sc+'">'+t.status+'</span></td></tr>'});
+  el.innerHTML=h+'</tbody></table>';
+}
+
+// ============================================================
+// PAYROLL
+// ============================================================
+function computePayroll(){
+  var month=document.getElementById('payroll-month').value,wd=parseInt(document.getElementById('working-days').value)||26;
+  if(!month){document.getElementById('payroll-table').innerHTML='<div style="font-size:13px;color:var(--danger);padding:10px">Please select a month.</div>';return}
+  var staffs=DB.users.filter(function(u){return u.role==='staff'});lastPayrollData=[];
+  var rows=staffs.map(function(u){
+    var att=DB.attendance.filter(function(a){return a.userId===u.id&&a.date.startsWith(month)});
+    var present=att.filter(function(a){return a.punchIn}).length,absent=Math.max(0,wd-present);
+    var deduction=Math.round(u.salary/wd*absent),earned=u.salary-deduction;
+    var approvedExp=DB.expenses.filter(function(e){return e.userId===u.id&&e.month===month&&e.status==='Approved'}).reduce(function(s,e){return s+e.amount},0);
+    var net=earned+approvedExp;
+    var r={name:u.name,desig:u.desig,salary:u.salary,present:present,absent:absent,deduction:deduction,earned:earned,approvedExp:approvedExp,net:net};
+    lastPayrollData.push(r);return r;
+  });
+  var totalNet=rows.reduce(function(s,r){return s+r.net},0);
+  var h='<table class="tbl"><thead><tr><th>Staff</th><th>Designation</th><th>Salary</th><th>Present</th><th>Absent</th><th>Deduction</th><th>Earned</th><th>Expenses</th><th>Net payable</th><th>Slip</th></tr></thead><tbody>';
+  rows.forEach(function(r){h+='<tr><td><div style="display:flex;align-items:center;gap:7px"><div class="avatar" style="width:26px;height:26px;font-size:10px">'+initials(r.name)+'</div>'+r.name+'</div></td><td style="font-size:11px">'+r.desig+'</td><td>'+inr(r.salary)+'</td><td><b>'+r.present+'</b></td><td style="color:var(--danger)">'+r.absent+'</td><td style="color:var(--danger)">— '+inr(r.deduction)+'</td><td>'+inr(r.earned)+'</td><td style="color:var(--success)">+ '+inr(r.approvedExp)+'</td><td><b style="color:var(--navy)">'+inr(r.net)+'</b></td><td><button class="btn btn-sm btn-outline" onclick="printSlip(\''+r.name+'\',\''+month+'\','+wd+')">Print slip</button></td></tr>'});
+  h+='</tbody><tfoot><tr><td colspan="8" style="font-weight:700">Total payable</td><td colspan="2" style="font-weight:700;font-size:15px">'+inr(totalNet)+'</td></tr></tfoot></table>';
+  document.getElementById('payroll-table').innerHTML=h;
+}
+
+function printSlip(name,month,wd){
+  var u=DB.users.find(function(x){return x.name===name});if(!u)return;
+  var att=DB.attendance.filter(function(a){return a.userId===u.id&&a.date.startsWith(month)});
+  var present=att.filter(function(a){return a.punchIn}).length,absent=Math.max(0,wd-present);
+  var deduction=Math.round(u.salary/wd*absent),earned=u.salary-deduction;
+  var exps=DB.expenses.filter(function(e){return e.userId===u.id&&e.month===month&&e.status==='Approved'});
+  var expTotal=exps.reduce(function(s,e){return s+e.amount},0),net=earned+expTotal;
+  var monthName=new Date(month+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'});
+  var win=window.open('','_blank','width=680,height:800');if(!win)return;
+  var logoSvg='<svg width="90" height="38" viewBox="0 0 200 84" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="84" rx="8" fill="#5b3f9e"/><rect x="10" y="10" width="10" height="64" rx="3" fill="#138808"/><rect x="10" y="10" width="10" height="22" rx="3" fill="#FF9933"/><rect x="10" y="31" width="10" height="22" fill="#ffffff"/><rect x="10" y="52" width="10" height="22" rx="3" fill="#138808"/><text x="28" y="66" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="52" fill="#ffffff">CMA</text><polygon points="158,4 186,4 186,32 158,32" fill="#f7941d"/><polyline points="163,20 172,29 188,10" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var h='<!DOCTYPE html><html><head><title>Salary Slip — '+u.name+'</title><style>*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif}body{padding:30px;color:#1a2e5a;font-size:13px}@media print{body{padding:15px}.no-print{display:none}}.hdr{background:#1a2e5a;color:#fff;padding:18px 24px;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:space-between}.firm{font-size:18px;font-weight:800}.sub{font-size:10px;opacity:0.7;margin-top:2px}.body{border:1px solid #dce3f0;border-top:none;border-radius:0 0 8px 8px;padding:20px 24px}.title{font-size:15px;font-weight:700;border-bottom:2px solid #e84c1e;padding-bottom:8px;margin-bottom:16px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eef1f8}.sec{font-size:10px;font-weight:800;color:#e84c1e;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}.total{display:flex;justify-content:space-between;padding:12px 0;font-weight:800;font-size:16px;border-top:2px solid #1a2e5a;margin-top:6px}.footer{margin-top:18px;font-size:10px;color:#8896a8;text-align:center;padding-top:10px;border-top:1px solid #dce3f0}.print-btn{display:inline-block;margin:16px auto;padding:10px 28px;background:#1a2e5a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px;margin:16px auto}</style></head><body>';
+  h+='<div class="hdr"><div><div class="firm">H H Shah &amp; Co.</div><div class="sub">Cost Accountants | CMA Hirav H. Shah</div><div class="sub">109-111, Offtel Tower, R C Dutt Road, Alkapuri, Vadodara - 390007</div><div class="sub">Tel: +91 0265-3575037 | hirav.shah09@gmail.com</div></div>'+logoSvg+'</div>';
+  h+='<div class="body"><div class="title">Salary / Stipend Slip &mdash; '+monthName+'</div>';
+  h+='<div class="row"><span>Name</span><span><b>'+u.name+'</b></span></div>';
+  h+='<div class="row"><span>Designation</span><span>'+u.desig+'</span></div>';
+  h+='<div class="row"><span>Working days in month</span><span>'+wd+' days</span></div>';
+  h+='<div class="sec">Earnings &amp; deductions</div>';
+  h+='<div class="row"><span>Monthly salary / stipend</span><span>'+inr(u.salary)+'</span></div>';
+  h+='<div class="row"><span>Days present</span><span>'+present+' days</span></div>';
+  h+='<div class="row"><span>Days absent</span><span>'+absent+' days</span></div>';
+  h+='<div class="row" style="color:#a32d2d"><span>Absence deduction ('+inr(Math.round(u.salary/wd))+'/day)</span><span>— '+inr(deduction)+'</span></div>';
+  h+='<div class="row"><span><b>Earned salary</b></span><span><b>'+inr(earned)+'</b></span></div>';
+  if(exps.length){
+    h+='<div class="sec">Approved expense reimbursements</div>';
+    exps.forEach(function(e){h+='<div class="row" style="color:#1a7a4a"><span>'+e.category+' ('+fmtDateShort(e.date)+')</span><span>+ '+inr(e.amount)+'</span></div>'});
+    h+='<div class="row" style="color:#1a7a4a"><span><b>Total reimbursements</b></span><span><b>+ '+inr(expTotal)+'</b></span></div>';
+  }
+  h+='<div class="total"><span>Net payable</span><span>'+inr(net)+'</span></div>';
+  h+='</div>';
+  h+='<div style="text-align:center;margin-top:16px"><button class="print-btn no-print" onclick="window.print()">Print / Save as PDF</button></div>';
+  h+='<div class="footer">This is a computer-generated salary slip. | H H Shah &amp; Co. Practice Management System</div>';
+  h+='<script>setTimeout(function(){window.print()},600)<\/script>';
+  h+='</body></html>';
+  win.document.write(h);win.document.close();
+}
+
+// ============================================================
+// BILLING — Client-wise
+// ============================================================
+function renderBilling(){
+  var cf=document.getElementById('bill-client').value;
+  var mf=document.getElementById('bill-month').value;
+  var clients=cf?DB.clients.filter(function(c){return c.name===cf}):DB.clients;
+  var area=document.getElementById('billing-area');
+  if(!clients.length){area.innerHTML='<div style="font-size:13px;color:var(--text3);padding:10px">No clients found.</div>';return}
+  var html='';
+  var grandTotal=0;
+  clients.forEach(function(client){
+    var clientTasks=DB.tasks.filter(function(t){return t.client===client.name&&(!mf||t.date.startsWith(mf))});
+    var clientBills=DB.bills.filter(function(b){return b.clientName===client.name&&(!mf||b.month===mf)});
+    var totalHrs=clientTasks.reduce(function(s,t){return s+t.hours},0);
+    var totalBilled=clientBills.reduce(function(s,b){return s+b.totalBilled},0);
+    grandTotal+=totalBilled;
+    var paidStatus=clientBills.length?clientBills.every(function(b){return b.paid})?'<span class="badge b-success">Paid</span>':clientBills.some(function(b){return b.paid})?'<span class="badge b-warning">Partial</span>':'<span class="badge b-danger">Unpaid</span>':'<span class="badge b-navy">No bill</span>';
+    html+='<div class="bill-client-card">';
+    html+='<div class="bill-client-name"><div><span>'+client.name+'</span> '+paidStatus+'</div><div style="font-size:11px;color:var(--text3)">'+client.service+(client.mobile?' | '+client.mobile:'')+'</div></div>';
+    html+='<div class="bill-row"><span style="color:var(--text2)">Contact</span><span>'+client.contact+(client.mobile?' &nbsp;|&nbsp; <a href="tel:'+client.mobile+'" style="color:var(--info)">'+client.mobile+'</a>':'')+'</span></div>';
+    html+='<div class="bill-row"><span style="color:var(--text2)">Hours logged ('+(mf?new Date(mf+'-01').toLocaleString('en-IN',{month:'short',year:'numeric'}):'all time')+')</span><span><b>'+totalHrs.toFixed(1)+'h</b></span></div>';
+    if(clientBills.length){
+      clientBills.forEach(function(b){
+        html+='<div class="bill-row"><span style="color:var(--text2);font-size:11px">'+b.items.map(function(i){return i.desc}).join(', ')+'</span><span><b>'+inr(b.totalBilled)+'</b> <span class="badge '+(b.paid?'b-success':'b-danger')+'">'+(b.paid?'Paid':'Unpaid')+'</span></span></div>';
+      });
+    } else {
+      html+='<div class="bill-row" style="color:var(--text3);font-size:12px"><span>No bill raised yet this period</span><span></span></div>';
+    }
+    html+='<div class="bill-row" style="margin-top:6px"><span></span><span><button class="btn btn-sm btn-navy" onclick="raiseBill(\''+client.name+'\')">+ Raise bill</button> <button class="btn btn-sm btn-outline" onclick="markPaid(\''+client.name+'\',\''+mf+'\')">Mark paid</button></span></div>';
+    html+='</div>';
+  });
+  if(!cf){html+='<div class="bill-total"><span>Grand total billed</span><span>'+inr(grandTotal)+'</span></div>'}
+  area.innerHTML=html;
+}
+
+function raiseBill(clientName){
+  var desc=prompt('Bill description (e.g. "GSTR-1 + GSTR-3B Filing — May 2026"):');
+  if(!desc)return;
+  var amt=parseFloat(prompt('Bill amount (₹):'));
+  if(!amt||isNaN(amt))return;
+  var mf=document.getElementById('bill-month').value||monthStr();
+  var clientTasks=DB.tasks.filter(function(t){return t.client===clientName&&t.date.startsWith(mf)});
+  var hrs=clientTasks.reduce(function(s,t){return s+t.hours},0);
+  var _bill={id:'b'+DB.nextId++,clientName:clientName,month:mf,items:[{desc:desc,amount:amt}],totalBilled:amt,hoursSpent:hrs,paid:false,remarks:''};
+  DB.bills.push(_bill);saveDB();cloudSave('bills',_bill);bumpCounter();renderBilling();
+}
+
+function markPaid(clientName,month){
+  var mf=month||monthStr();
+  DB.bills.filter(function(b){return b.clientName===clientName&&b.month===mf}).forEach(function(b){b.paid=true;saveDB();cloudUpdate('bills',b.id,{paid:true});});
+  renderBilling();
+}
+
+// ============================================================
+// EXPENSES ADMIN
+// ============================================================
+function filterExpenses(){var sf=document.getElementById('exp-staff-filter').value,stf=document.getElementById('exp-status-filter').value;renderExpenseTable(DB.expenses.filter(function(e){return(!sf||e.userName===sf)&&(!stf||e.status===stf)}))}
+function renderExpenseTable(data){
+  var el=document.getElementById('exp-table');
+  if(!data.length){el.innerHTML='<div style="font-size:13px;color:var(--text3);padding:10px">No records found.</div>';return}
+  var h='<table class="tbl"><thead><tr><th>Date</th><th>Staff</th><th>Category</th><th>Amount</th><th>Remarks</th><th>Doc</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+  data.slice().reverse().forEach(function(e){
+    var sc=e.status==='Approved'?'b-success':e.status==='Rejected'?'b-danger':'b-warning';
+    var fh=e.fileData&&e.fileData.startsWith('data:image')?'<img src="'+e.fileData+'" class="file-thumb" onclick="openLightbox(\''+e.fileData+'\')" style="width:32px;height:32px"/>':e.fileName?'<span class="file-doc">'+e.fileName+'</span>':'—';
+    var actions=e.status==='Pending'?'<button class="btn btn-sm btn-success" style="margin-right:4px" onclick="approveExpDirect('+e.id+',\'Approved\')">Approve</button><button class="btn btn-sm btn-danger-soft" onclick="approveExpDirect('+e.id+',\'Rejected\')">Reject</button>':'';
+    h+='<tr><td>'+fmtDateShort(e.date)+'</td><td>'+e.userName+'</td><td style="font-size:11px">'+e.category+'</td><td><b>'+inr(e.amount)+'</b></td><td style="max-width:140px;font-size:12px">'+e.remarks+'</td><td>'+fh+'</td><td><span class="badge '+sc+'">'+e.status+'</span></td><td>'+actions+'</td></tr>';
+  });
+  el.innerHTML=h+'</tbody></table>';
+}
+function approveExpDirect(id,status){var e=DB.expenses.find(function(x){return x.id===id});if(e){e.status=status;saveDB();cloudUpdate('expenses',id,{status:status});filterExpenses();renderAdmin()}}
+
+// ============================================================
+// USERS / CLIENTS / TASK TYPES
+// ============================================================
+function renderUsersTable(){
+  var h='<table class="tbl"><thead><tr><th>Name</th><th>Designation</th><th>Role</th><th>Salary (₹/mo)</th><th>Update salary</th><th>Update role</th><th>Remove</th></tr></thead><tbody>';
+  DB.users.filter(function(u){return u.name!=='admin'}).forEach(function(u){
+    h+='<tr><td><div style="display:flex;align-items:center;gap:8px"><div class="avatar">'+initials(u.name)+'</div><div><div style="font-size:13px;font-weight:600">'+u.name+'</div><div style="font-size:11px;color:var(--text3)">'+u.desig+'</div></div></div></td>';
+    h+='<td style="font-size:11px">'+u.desig+'</td><td><span class="badge '+(u.role==='admin'?'b-accent':'b-navy')+'">'+u.role+'</span></td>';
+    h+='<td><b>'+inr(u.salary||0)+'</b></td>';
+    h+='<td><input type="number" style="width:100px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;margin-right:6px" placeholder="New ₹" id="sal-'+u.id+'"/><button class="btn btn-sm btn-outline" onclick="updateSalary('+u.id+')">Update</button></td>';
+    h+='<td><select id="role-'+u.id+'" style="padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;margin-right:6px"><option value="staff"'+(u.role==='staff'?' selected':'')+'>Staff</option><option value="admin"'+(u.role==='admin'?' selected':'')+'>Admin</option></select><button class="btn btn-sm btn-outline" onclick="updateRole('+u.id+')">Update</button></td>';
+    h+='<td><button class="btn btn-sm btn-danger-soft" onclick="removeUser('+u.id+')">Remove</button></td></tr>';
+  });
+  document.getElementById('users-table').innerHTML=h+'</tbody></table>';
+}
+function updateSalary(id){var inp=document.getElementById('sal-'+id),val=parseFloat(inp.value);if(!val||val<0)return;var u=DB.users.find(function(x){return x.id===id});if(u){u.salary=val;renderUsersTable();showAlert('user-alert','Salary updated for '+u.name,'success')}}
+function updateRole(id){
+  var sel=document.getElementById('role-'+id);
+  if(!sel)return;
+  var u=DB.users.find(function(x){return x.id===id});
+  if(u){
+    u.role=sel.value;
+    saveDB();cloudUpdate('users',u.id,{role:u.role});
+    renderUsersTable();
+    showAlert('user-alert','Role updated for '+u.name+' to '+sel.value,'success');
+    populateAdminFilters();
+  }
+}
+function addUser(){
+  var name=document.getElementById('new-username').value.trim(),pass=document.getElementById('new-password').value.trim(),role=document.getElementById('new-role').value,desig=document.getElementById('new-desig').value.trim(),salary=parseFloat(document.getElementById('new-salary').value)||0;
+  if(!name||!pass){showAlert('user-alert','Name and password required','danger');return}
+  if(DB.users.find(function(u){return u.name.toLowerCase()===name.toLowerCase()})){showAlert('user-alert','User already exists','danger');return}
+  var _usr={id:DB.nextId++,name:name,password:pass,role:role,desig:desig,salary:salary};
+  DB.users.push(_usr);saveDB();cloudSave('users',_usr);bumpCounter();
+  showAlert('user-alert','"'+name+'" added','success');
+  ['new-username','new-password','new-desig','new-salary'].forEach(function(id){document.getElementById(id).value=''});
+  renderUsersTable();populateAdminFilters();
+}
+function removeUser(id){DB.users=DB.users.filter(function(u){return u.id!==id});saveDB();cloudDelete('users',id);renderUsersTable()}
+
+function renderClientsTable(){
+  var h='<table class="tbl"><thead><tr><th>Client name</th><th>Contact</th><th>Mobile</th><th>Service</th><th>Remove</th></tr></thead><tbody>';
+  DB.clients.forEach(function(c){h+='<tr><td><b>'+c.name+'</b></td><td>'+c.contact+'</td><td><a href="tel:'+c.mobile+'" style="color:var(--info)">'+c.mobile+'</a></td><td style="font-size:11px">'+c.service+'</td><td><button class="btn btn-sm btn-danger-soft" onclick="removeClient(\''+c.id+'\')">Remove</button></td></tr>'});
+  document.getElementById('clients-table').innerHTML=h+'</tbody></table>';
+}
+function removeClient(id){DB.clients=DB.clients.filter(function(c){return c.id!==id});saveDB();cloudDelete('clients',id);renderClientsTable();populateAdminFilters();populateTaskDropdowns()}
+
+function renderTaskTypesList(){
+  var h='<div style="display:flex;flex-wrap:wrap;gap:8px">';
+  DB.taskTypes.forEach(function(t,i){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 12px;font-size:13px;display:flex;align-items:center;gap:8px">'+t+'<span style="cursor:pointer;color:var(--danger);font-size:16px;line-height:1" onclick="removeTaskType('+i+')">&times;</span></div>'});
+  h+='</div>';
+  document.getElementById('tasktypes-list').innerHTML=h;
+}
+function removeTaskType(i){DB.taskTypes.splice(i,1);saveDB();renderTaskTypesList();populateTaskDropdowns()}
+
+// ============================================================
+// CSV EXPORT
+// ============================================================
+function exportCSV(type){
+  var rows=[],fn='';
+  if(type==='attendance'){fn='HHShah_Attendance.csv';rows=[['Date','Staff','Punch In','Punch Out','Hours']];DB.attendance.forEach(function(a){rows.push([a.date,a.userName,a.punchIn,a.punchOut||'',a.hoursWorked||''])})}
+  else if(type==='tasks'){fn='HHShah_Tasks.csv';rows=[['Date','Staff','Client','Task Type','Description','Remarks','Hours','Status']];DB.tasks.forEach(function(t){rows.push([t.date,t.userName,t.client,t.taskType,t.description,t.remarks||'',t.hours,t.status])})}
+  else if(type==='expenses'){fn='HHShah_Expenses.csv';rows=[['Date','Month','Staff','Category','Amount','Remarks','File','Status']];DB.expenses.forEach(function(e){rows.push([e.date,e.month,e.userName,e.category,e.amount,e.remarks,e.fileName||'',e.status])})}
+  else if(type==='payroll'){fn='HHShah_Payroll.csv';rows=[['Name','Designation','Salary','Present','Absent','Deduction','Earned','Expenses','Net Payable']];lastPayrollData.forEach(function(r){rows.push([r.name,r.desig,r.salary,r.present,r.absent,r.deduction,r.earned,r.approvedExp,r.net])})}
+  else if(type==='billing'){fn='HHShah_Billing.csv';rows=[['Client','Month','Description','Billed Amount','Hours','Paid']];DB.bills.forEach(function(b){rows.push([b.clientName,b.month,b.items.map(function(i){return i.desc}).join('; '),b.totalBilled,b.hoursSpent,b.paid?'Yes':'No'])})}
+  if(!rows.length)return;
+  var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(',')}).join('\n');
+  var blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// KEY EVENTS
+// ============================================================
+document.getElementById('inp-user').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('inp-pass').focus()});
+document.getElementById('inp-pass').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()});
+document.querySelectorAll('.modal-overlay').forEach(function(el){el.addEventListener('click',function(e){if(e.target===el)el.classList.remove('open')})});
+</script>
+</body>
+</html>
