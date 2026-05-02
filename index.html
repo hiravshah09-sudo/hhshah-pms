@@ -97,13 +97,22 @@ function startRealtimeListeners(){
 }
 
 function pushInitialData(){
-  if(!firebaseReady||!db){ alert('Firebase not configured. Please add your Firebase config first.'); return; }
-  DB.users.forEach(function(r){ db.collection('users').doc(String(r.id)).set(r) });
-  DB.clients.forEach(function(r){ db.collection('clients').doc(String(r.id)).set(r) });
-  DB.taskTypes.forEach(function(t,i){ db.collection('taskTypes').doc('tt'+i).set({id:'tt'+i,name:t}) });
-  db.collection('meta').doc('counter').set({nextId:DB.nextId});
-  alert('Data pushed to Firebase! All devices will now sync.');
-  console.log('Initial data pushed to Firestore');
+  if(!firebaseReady||!db){
+    showAlert('user-alert','Firebase not connected. Check your config.','danger');
+    return;
+  }
+  var promises=[];
+  DB.users.forEach(function(r){ promises.push(db.collection('users').doc(String(r.id)).set(r)) });
+  DB.clients.forEach(function(r){ promises.push(db.collection('clients').doc(String(r.id)).set(r)) });
+  DB.taskTypes.forEach(function(t,i){ promises.push(db.collection('taskTypes').doc('tt'+i).set({id:'tt'+i,name:t})) });
+  promises.push(db.collection('meta').doc('counter').set({nextId:DB.nextId}));
+  Promise.all(promises).then(function(){
+    showAlert('user-alert','All data pushed to cloud successfully! All devices will now sync.','success');
+    console.log('All data pushed to Firestore');
+  }).catch(function(e){
+    showAlert('user-alert','Push failed: '+e.message,'danger');
+    console.error('Push error:',e);
+  });
 }
 
 // ── Startup: load from Firestore then start listeners ────────────────────────
@@ -1112,7 +1121,7 @@ function renderUsersTable(){
     h+='<td><b>'+inr(u.salary||0)+'</b></td>';
     h+='<td><input type="number" style="width:100px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;margin-right:6px" placeholder="New ₹" id="sal-'+u.id+'"/><button class="btn btn-sm btn-outline" onclick="updateSalary('+u.id+')">Update</button></td>';
     h+='<td><select id="role-'+u.id+'" style="padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;margin-right:6px"><option value="staff"'+(u.role==='staff'?' selected':'')+'>Staff</option><option value="admin"'+(u.role==='admin'?' selected':'')+'>Admin</option></select><button class="btn btn-sm btn-outline" onclick="updateRole('+u.id+')">Update</button></td>';
-    h+='<td><button class="btn btn-sm btn-danger-soft" onclick="removeUser('+u.id+')">Remove</button></td></tr>';
+    h+='<td><button class="btn btn-sm btn-danger-soft" data-uid="'+u.id+'" onclick="removeUser(parseInt(this.dataset.uid))">Remove</button></td></tr>';
   });
   document.getElementById('users-table').innerHTML=h+'</tbody></table>';
 }
@@ -1135,17 +1144,33 @@ function addUser(){
   if(DB.users.find(function(u){return u.name.toLowerCase()===name.toLowerCase()})){showAlert('user-alert','User already exists','danger');return}
   var _usr={id:DB.nextId++,name:name,password:pass,role:role,desig:desig,salary:salary};
   DB.users.push(_usr);saveDB();cloudSave('users',_usr);bumpCounter();
-  showAlert('user-alert','"'+name+'" added','success');
+  showAlert('user-alert',name+' added successfully!','success');console.log('User added:',name,'Total users:',DB.users.length);
   ['new-username','new-password','new-desig','new-salary'].forEach(function(id){document.getElementById(id).value=''});
   renderUsersTable();populateAdminFilters();
 }
 function removeUser(id){DB.users=DB.users.filter(function(u){return u.id!==id});saveDB();cloudDelete('users',id);renderUsersTable()}
 
 function renderClientsTable(){
+  var tbl=document.getElementById('clients-table');
+  if(!tbl)return;
+  if(!DB.clients.length){
+    tbl.innerHTML='<table class="tbl"><tbody><tr><td style="text-align:center;color:var(--text3);padding:16px">No clients yet.</td></tr></tbody></table>';
+    return;
+  }
   var h='<table class="tbl"><thead><tr><th>Client name</th><th>Contact</th><th>Mobile</th><th>Service</th><th>Remove</th></tr></thead><tbody>';
-  DB.clients.forEach(function(c){h+='<tr><td><b>'+c.name+'</b></td><td>'+c.contact+'</td><td><a href="tel:'+c.mobile+'" style="color:var(--info)">'+c.mobile+'</a></td><td style="font-size:11px">'+c.service+'</td><td><button class="btn btn-sm btn-danger-soft" onclick="removeClient(\''+c.id+'\')">Remove</button></td></tr>'});
-  document.getElementById('clients-table').innerHTML=h+'</tbody></table>';
+  DB.clients.forEach(function(c){
+    var cid=String(c.id).replace(/'/g,'');
+    h+='<tr>';
+    h+='<td><b>'+c.name+'</b></td>';
+    h+='<td>'+(c.contact||'')+'</td>';
+    h+='<td><a href="tel:'+(c.mobile||'')+'" style="color:var(--info)">'+(c.mobile||'')+'</a></td>';
+    h+='<td style="font-size:11px">'+(c.service||'')+'</td>';
+    h+='<td><button class="btn btn-sm btn-danger-soft" data-cid="'+cid+'" onclick="removeClient(this.dataset.cid)">Remove</button></td>';
+    h+='</tr>';
+  });
+  tbl.innerHTML=h+'</tbody></table>';
 }
+
 function removeClient(id){DB.clients=DB.clients.filter(function(c){return c.id!==id});saveDB();cloudDelete('clients',id);renderClientsTable();populateAdminFilters();populateTaskDropdowns()}
 
 function renderTaskTypesList(){
